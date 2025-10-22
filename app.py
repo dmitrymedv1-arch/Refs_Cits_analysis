@@ -2,414 +2,376 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-import json
+import plotly.express as px
+import plotly.graph_objects as go
+from scipy import stats
+from tqdm import tqdm
 import time
 from datetime import datetime
-from collections import Counter
 import re
-import os
-import tempfile
-import nltk
-from nltk.corpus import stopwords
+import json
+import io
 
 # Настройка страницы Streamlit
 st.set_page_config(
-    page_title="Citation Analyzer",
+    page_title="Advanced Citation Analyzer",
     page_icon="📚",
     layout="wide"
 )
 
-# Download NLTK data if needed
-try:
-    nltk.data.find('corpora/stopwords')
-except LookupError:
-    nltk.download('stopwords')
-
-class Config:
-    REQUEST_TIMEOUT = 30
-    MAX_RETRIES = 3
-    DELAY_BETWEEN_REQUESTS = 0.5
-
-class FastAffiliationProcessor:
-    def __init__(self):
-        self.common_keywords = {
-            'university', 'college', 'institute', 'school', 'department', 'faculty',
-            'laboratory', 'center', 'centre', 'academy', 'research'
-        }
-        self.organization_cache = {}
-
-    def extract_main_organization_fast(self, affiliation: str) -> str:
-        if not affiliation or affiliation in ['Unknown', 'Error', '']:
-            return "Unknown"
-
-        if affiliation in self.organization_cache:
-            return self.organization_cache[affiliation]
-
-        clean_affiliation = affiliation.strip()
-        clean_affiliation = re.sub(r'\S+@\S+', '', clean_affiliation)
-        clean_affiliation = re.sub(r'\d{5,}(?:-\d{4})?', '', clean_affiliation)
-
-        parts = re.split(r'[,;]', clean_affiliation)
-        main_org_candidates = []
-
-        for part in parts:
-            part = part.strip()
-            if not part or len(part) < 5:
-                continue
-
-            part_lower = part.lower()
-            has_org_keyword = any(keyword in part_lower for keyword in self.common_keywords)
-
-            if has_org_keyword:
-                main_org_candidates.append(part)
-
-        if main_org_candidates:
-            main_org_candidates.sort(key=len, reverse=True)
-            main_org = main_org_candidates[0]
-        else:
-            for part in parts:
-                part = part.strip()
-                if len(part) > 10:
-                    main_org = part
-                    break
-            else:
-                main_org = clean_affiliation
-
-        main_org = re.sub(r'\s+', ' ', main_org).strip()
-        result = main_org if main_org else "Unknown"
-        self.organization_cache[affiliation] = result
-        return result
-
 class CitationAnalyzer:
     def __init__(self):
-        self.crossref_cache = {}
-        self.openalex_cache = {}
-        self.fast_affiliation_processor = FastAffiliationProcessor()
-        self.stop_words = set(stopwords.words('english'))
-
-    def validate_doi(self, doi: str) -> bool:
+        self.cache = {}
+    
+    def validate_doi(self, doi):
+        """Проверяет валидность DOI"""
         if not doi or not isinstance(doi, str):
             return False
-
+            
         doi = self.normalize_doi(doi)
-        doi_pattern = r'^10\.\d{4,9}/[-._;()/:a-zA-Z0-9]+$'
-
-        if not bool(re.match(doi_pattern, doi, re.IGNORECASE)):
-            return False
-
-        return True
-
-    def normalize_doi(self, doi: str) -> str:
-        if not doi or not isinstance(doi, str):
+        pattern = r'^10\.\d{4,9}/[-._;()/:a-zA-Z0-9]+$'
+        return bool(re.match(pattern, doi))
+    
+    def normalize_doi(self, doi):
+        """Нормализует DOI"""
+        if not doi:
             return ""
-
+            
         doi = doi.strip()
+        
+        # Удаляем префиксы
         prefixes = [
             'https://doi.org/', 'http://doi.org/', 'doi.org/',
-            'doi:', 'DOI:', 'https://dx.doi.org/', 'http://dx.doi.org/',
+            'doi:', 'DOI:', 'https://dx.doi.org/', 'http://dx.doi.org/'
         ]
-
+        
         for prefix in prefixes:
             if doi.lower().startswith(prefix.lower()):
                 doi = doi[len(prefix):]
                 break
-
+                
         doi = doi.split('?')[0].split('#')[0]
         return doi.strip().lower()
-
-    def parse_doi_input(self, input_text: str, max_dois: int = 50) -> List[str]:
-        if not input_text or not isinstance(input_text, str):
-            st.error("Error: Input is empty or not a string")
+    
+    def parse_doi_input(self, input_text, max_dois=20):
+        """Парсит ввод с DOI"""
+        if not input_text:
+            st.error("Please enter at least one DOI")
             return []
-
+            
         lines = input_text.strip().split('\n')
         dois = []
-
+        
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-
-            line = line.rstrip('.,;')
+                
+            # Ищем DOI в строке
             doi_pattern = r'10\.\d{4,9}/[-._;()/:a-zA-Z0-9]+'
-            found_dois = re.findall(doi_pattern, line, re.IGNORECASE)
-
-            if found_dois:
-                dois.extend(found_dois)
-            else:
-                if 'doi.org/' in line.lower():
-                    doi_part = line.lower().split('doi.org/')[-1]
-                    doi_part = doi_part.split('?')[0].split('#')[0].strip()
-                    if self.validate_doi(doi_part):
-                        dois.append(doi_part)
-                elif self.validate_doi(line):
-                    dois.append(line)
-
-        cleaned_dois = []
-        for doi in dois:
-            normalized_doi = self.normalize_doi(doi)
-            if self.validate_doi(normalized_doi):
-                cleaned_dois.append(normalized_doi)
-
+            matches = re.findall(doi_pattern, line, re.IGNORECASE)
+            
+            if matches:
+                dois.extend(matches)
+            elif self.validate_doi(line):
+                dois.append(self.normalize_doi(line))
+        
+        # Убираем дубликаты и ограничиваем количество
         unique_dois = []
         seen = set()
-        for doi in cleaned_dois:
-            if doi not in seen:
-                seen.add(doi)
-                unique_dois.append(doi)
-
+        for doi in dois:
+            normalized = self.normalize_doi(doi)
+            if normalized not in seen and self.validate_doi(normalized):
+                seen.add(normalized)
+                unique_dois.append(normalized)
+                
         unique_dois = unique_dois[:max_dois]
-
+        
         if not unique_dois:
-            st.error("Error: No valid DOIs found in the input.")
-            st.info("Valid examples: 10.1234/abcd.1234, https://doi.org/10.1234/abcd.1234")
+            st.error("No valid DOIs found. Examples: 10.1038/s41586-023-06924-6")
         else:
             st.success(f"Found {len(unique_dois)} valid DOI(s)")
-
+            
         return unique_dois
-
-    def get_crossref_data(self, doi: str) -> Dict:
-        if doi in self.crossref_cache:
-            return self.crossref_cache[doi]
-        
+    
+    def get_article_data(self, doi):
+        """Получает данные статьи из Crossref API"""
+        if doi in self.cache:
+            return self.cache[doi]
+            
         try:
             url = f"https://api.crossref.org/works/{doi}"
-            response = requests.get(url, timeout=Config.REQUEST_TIMEOUT)
+            response = requests.get(url, timeout=30)
             
             if response.status_code == 200:
                 data = response.json()['message']
                 
-                # Extract year
-                year = None
+                # Извлекаем основную информацию
+                title = data.get('title', ['Unknown'])[0] if data.get('title') else 'Unknown'
+                
+                # Извлекаем год публикации
+                year = 'Unknown'
                 for key in ['published-print', 'published-online', 'issued']:
-                    if key in data and 'date-parts' in data[key]:
+                    if key in data and data[key].get('date-parts'):
                         date_parts = data[key]['date-parts'][0]
-                        year = date_parts[0] if date_parts else None
-                        break
-                data['publication_year'] = year if year else 'Unknown'
+                        if date_parts and len(date_parts) > 0:
+                            year = str(date_parts[0])
+                            break
                 
-                self.crossref_cache[doi] = data
-                return data
+                # Извлекаем авторов
+                authors = []
+                if data.get('author'):
+                    for author in data['author']:
+                        given = author.get('given', '')
+                        family = author.get('family', '')
+                        if given or family:
+                            authors.append(f"{given} {family}".strip())
+                
+                authors_str = ', '.join(authors) if authors else 'Unknown'
+                
+                # Извлекаем журнал
+                journal = data.get('container-title', ['Unknown'])[0] if data.get('container-title') else 'Unknown'
+                
+                # Извлекаем издателя
+                publisher = data.get('publisher', 'Unknown')
+                
+                # Количество цитирований
+                citation_count = data.get('is-referenced-by-count', 0)
+                
+                result = {
+                    'doi': doi,
+                    'title': title,
+                    'year': year,
+                    'authors': authors_str,
+                    'journal': journal,
+                    'publisher': publisher,
+                    'citation_count': citation_count,
+                    'author_count': len(authors),
+                    'error': None
+                }
+                
+                self.cache[doi] = result
+                return result
+                
             else:
-                return {'publication_year': 'Unknown', 'title': ['Unknown']}
+                result = {
+                    'doi': doi,
+                    'title': 'Error',
+                    'year': 'Unknown',
+                    'authors': 'Error',
+                    'journal': 'Error',
+                    'publisher': 'Error',
+                    'citation_count': 0,
+                    'author_count': 0,
+                    'error': f"HTTP {response.status_code}"
+                }
+                self.cache[doi] = result
+                return result
                 
         except Exception as e:
-            return {'publication_year': 'Unknown', 'title': ['Unknown']}
-
-    def get_openalex_data(self, doi: str) -> Dict:
-        if doi in self.openalex_cache:
-            return self.openalex_cache[doi]
-        
-        try:
-            openalex_url = f"https://api.openalex.org/works/https://doi.org/{doi}"
-            response = requests.get(openalex_url, timeout=Config.REQUEST_TIMEOUT)
-            
-            if response.status_code == 200:
-                data = response.json()
-                self.openalex_cache[doi] = data
-                return data
-            else:
-                return {}
-                
-        except Exception:
-            return {}
-
-    def get_combined_article_data(self, doi: str) -> Dict[str, Any]:
-        try:
-            crossref_data = self.get_crossref_data(doi)
-            openalex_data = self.get_openalex_data(doi)
-
-            # Get title
-            title = 'Unknown'
-            if openalex_data and openalex_data.get('title'):
-                title = openalex_data['title']
-            elif crossref_data.get('title'):
-                title_list = crossref_data['title']
-                if title_list:
-                    title = title_list[0]
-
-            # Get year
-            year = 'Unknown'
-            if openalex_data and openalex_data.get('publication_year'):
-                year = str(openalex_data['publication_year'])
-            elif crossref_data.get('publication_year') != 'Unknown':
-                year = str(crossref_data['publication_year'])
-
-            # Get authors
-            authors = []
-            if openalex_data:
-                for author in openalex_data.get('authorships', []):
-                    name = author.get('author', {}).get('display_name', 'Unknown')
-                    if name != 'Unknown':
-                        authors.append(name)
-
-            if not authors and crossref_data.get('author'):
-                for author in crossref_data['author']:
-                    given = author.get('given', '')
-                    family = author.get('family', '')
-                    if given or family:
-                        name = f"{given} {family}".strip()
-                        authors.append(name)
-
-            authors_str = ', '.join(authors) if authors else 'Unknown'
-            author_count = len(authors) if authors else 0
-
-            # Get journal info
-            journal_info = self.get_journal_info_from_crossref(doi)
-
-            # Get citations
-            citation_count = crossref_data.get('is-referenced-by-count', 0)
-
-            return {
-                'doi': doi,
-                'title': title,
-                'year': year,
-                'authors': authors_str,
-                'author_count': author_count,
-                'journal': journal_info['full_name'],
-                'publisher': journal_info['publisher'],
-                'citation_count': citation_count,
-            }
-            
-        except Exception as e:
-            return {
+            result = {
                 'doi': doi,
                 'title': 'Error',
                 'year': 'Unknown',
                 'authors': 'Error',
-                'author_count': 0,
                 'journal': 'Error',
                 'publisher': 'Error',
                 'citation_count': 0,
+                'author_count': 0,
                 'error': str(e)
             }
-
-    def get_journal_info_from_crossref(self, doi: str) -> Dict[str, Any]:
-        try:
-            data = self.get_crossref_data(doi)
-            container_title = data.get('container-title', [])
-            full_name = container_title[0] if container_title else 'Unknown'
-            return {
-                'full_name': full_name,
-                'publisher': data.get('publisher', 'Unknown'),
-            }
-        except:
-            return {
-                'full_name': 'Unknown',
-                'publisher': 'Unknown',
-            }
-
-    def process_references_analysis(self, doi_list: List[str]) -> pd.DataFrame:
+            self.cache[doi] = result
+            return result
+    
+    def analyze_articles(self, doi_list):
+        """Анализирует список статей"""
         results = []
         
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         for i, doi in enumerate(doi_list):
-            status_text.text(f"Processing article {i+1}/{len(doi_list)}: {doi}")
+            status_text.text(f"Processing {i+1}/{len(doi_list)}: {doi}")
+            result = self.get_article_data(doi)
+            results.append(result)
             
-            article_data = self.get_combined_article_data(doi)
-            results.append(article_data)
+            # Задержка чтобы не перегружать API
+            time.sleep(0.5)
             
-            time.sleep(Config.DELAY_BETWEEN_REQUESTS)
             progress_bar.progress((i + 1) / len(doi_list))
         
         status_text.empty()
         progress_bar.empty()
         
-        return pd.DataFrame(results)
+        return results
 
-    def analyze_titles(self, titles: List[str]) -> pd.DataFrame:
-        content_words = []
-        valid_titles = [t for t in titles if t not in ['Unknown', 'Error']]
+def create_visualizations(df):
+    """Создает визуализации для данных"""
+    
+    # Только успешные записи
+    success_df = df[df['title'] != 'Error'].copy()
+    
+    if len(success_df) == 0:
+        st.warning("No successful data to visualize")
+        return
+    
+    # Преобразуем год в числовой формат
+    success_df['year_num'] = pd.to_numeric(success_df['year'], errors='coerce')
+    success_df = success_df.dropna(subset=['year_num'])
+    
+    # Создаем вкладки для визуализаций
+    tab1, tab2, tab3 = st.tabs(["Citations Analysis", "Year Distribution", "Authors Analysis"])
+    
+    with tab1:
+        # Анализ цитирований
+        col1, col2 = st.columns(2)
         
-        for title in valid_titles:
-            if not title:
-                continue
-                
-            text = title.lower()
-            text = re.sub(r'[^a-zA-Z\s-]', ' ', text)
-            text = re.sub(r'\s+', ' ', text).strip()
-            words = text.split()
-            
-            for word in words:
-                if len(word) > 3 and word not in self.stop_words:
-                    content_words.append(word)
+        with col1:
+            fig = px.histogram(success_df, x='citation_count', 
+                              title='Distribution of Citation Counts',
+                              labels={'citation_count': 'Citation Count'},
+                              nbins=20)
+            st.plotly_chart(fig, use_container_width=True)
         
-        word_freq = Counter(content_words)
-        return pd.DataFrame(word_freq.most_common(20), columns=['Word', 'Frequency'])
+        with col2:
+            if len(success_df) > 1:
+                fig = px.scatter(success_df, x='year_num', y='citation_count',
+                                hover_data=['title'],
+                                title='Citations vs Publication Year',
+                                labels={'year_num': 'Publication Year', 'citation_count': 'Citation Count'})
+                st.plotly_chart(fig, use_container_width=True)
+    
+    with tab2:
+        # Распределение по годам
+        year_counts = success_df['year_num'].value_counts().sort_index()
+        fig = px.bar(x=year_counts.index, y=year_counts.values,
+                    title='Publications by Year',
+                    labels={'x': 'Year', 'y': 'Number of Publications'})
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with tab3:
+        # Анализ авторов
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            author_stats = success_df['author_count'].describe()
+            st.metric("Average Authors per Paper", f"{author_stats['mean']:.1f}")
+            st.metric("Max Authors", int(author_stats['max']))
+        
+        with col2:
+            fig = px.box(success_df, y='author_count', 
+                        title='Distribution of Author Counts',
+                        labels={'author_count': 'Number of Authors'})
+            st.plotly_chart(fig, use_container_width=True)
 
 def main():
-    st.title("📚 Simple Citation Analyzer")
-    st.markdown("Analyze basic information for scientific articles using DOI identifiers")
+    st.title("📊 Advanced DOI Citation Analyzer")
+    st.markdown("Analyze scientific articles using DOI identifiers with advanced visualizations")
     
-    # Initialize analyzer
+    # Инициализация анализатора
     if 'analyzer' not in st.session_state:
         st.session_state.analyzer = CitationAnalyzer()
     
     analyzer = st.session_state.analyzer
     
-    st.header("Basic Article Analysis")
-    
+    # Ввод DOI
+    st.header("🔍 Input DOIs")
     doi_input = st.text_area(
-        "Enter DOIs for analysis",
-        value="10.1038/s41586-023-06924-6\n10.1126/science.abl4471",
-        placeholder="Enter one or more DOIs separated by new lines",
-        height=100
+        "Enter DOIs for analysis (one per line or separated by any punctuation)",
+        value="10.1038/s41586-023-06924-6\n10.1126/science.abl4471\n10.1038/s41567-023-02076-6",
+        height=150,
+        help="Examples: 10.1038/s41586-023-06924-6, https://doi.org/10.1126/science.abl4471"
     )
     
-    if st.button("Analyze Articles", type="primary"):
+    if st.button("🚀 Analyze Articles", type="primary"):
         if doi_input:
             with st.spinner("Parsing DOIs..."):
                 doi_list = analyzer.parse_doi_input(doi_input)
             
             if doi_list:
-                st.success(f"Found {len(doi_list)} valid DOI(s)")
+                # Анализ статей
+                with st.spinner("Fetching article data..."):
+                    results = analyzer.analyze_articles(doi_list)
                 
-                with st.spinner("Processing articles..."):
-                    try:
-                        results_df = analyzer.process_references_analysis(doi_list)
-                        
-                        # Display results
-                        st.header("Analysis Results")
-                        
-                        # Basic metrics
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Articles Processed", len(results_df))
-                        with col2:
-                            avg_citations = results_df['citation_count'].mean()
-                            st.metric("Avg Citations", f"{avg_citations:.1f}")
-                        with col3:
-                            success_rate = len(results_df[results_df['title'] != 'Error']) / len(results_df) * 100
-                            st.metric("Success Rate", f"{success_rate:.1f}%")
-                        
-                        # Display data
-                        st.subheader("Article Data")
-                        display_cols = ['doi', 'title', 'authors', 'year', 'journal', 'citation_count']
-                        available_cols = [col for col in display_cols if col in results_df.columns]
-                        st.dataframe(results_df[available_cols])
-                        
-                        # Title word analysis
-                        st.subheader("Title Word Frequency")
-                        word_freq_df = analyzer.analyze_titles(results_df['title'].tolist())
-                        st.dataframe(word_freq_df)
-                        
-                        # Download option
-                        csv = results_df.to_csv(index=False)
-                        st.download_button(
-                            label="📥 Download Results as CSV",
-                            data=csv,
-                            file_name="citation_analysis_results.csv",
-                            mime="text/csv"
-                        )
-                        
-                    except Exception as e:
-                        st.error(f"Error during processing: {str(e)}")
+                # Создаем DataFrame
+                df = pd.DataFrame(results)
+                
+                # Показываем результаты
+                st.header("📈 Analysis Results")
+                
+                # Основные метрики
+                col1, col2, col3, col4 = st.columns(4)
+                
+                total_articles = len(df)
+                successful = len(df[df['title'] != 'Error'])
+                avg_citations = df[df['citation_count'] > 0]['citation_count'].mean()
+                total_citations = df['citation_count'].sum()
+                
+                with col1:
+                    st.metric("Total Articles", total_articles)
+                with col2:
+                    st.metric("Successful", successful, f"{successful/total_articles*100:.1f}%")
+                with col3:
+                    st.metric("Avg Citations", f"{avg_citations:.1f}" if not np.isnan(avg_citations) else "0")
+                with col4:
+                    st.metric("Total Citations", int(total_citations))
+                
+                # Таблица с результатами
+                st.subheader("📋 Article Details")
+                
+                # Выбираем колонки для отображения
+                display_columns = ['doi', 'title', 'year', 'authors', 'journal', 'citation_count']
+                available_columns = [col for col in display_columns if col in df.columns]
+                
+                st.dataframe(df[available_columns], use_container_width=True)
+                
+                # Визуализации
+                st.subheader("📊 Visualizations")
+                create_visualizations(df)
+                
+                # Опции для скачивания
+                st.subheader("💾 Download Results")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # CSV download
+                    csv = df.to_csv(index=False)
+                    st.download_button(
+                        label="📥 Download as CSV",
+                        data=csv,
+                        file_name="citation_analysis.csv",
+                        mime="text/csv"
+                    )
+                
+                with col2:
+                    # JSON download
+                    json_data = df.to_json(orient='records', indent=2)
+                    st.download_button(
+                        label="📥 Download as JSON",
+                        data=json_data,
+                        file_name="citation_analysis.json",
+                        mime="application/json"
+                    )
+                
+                # Статистика
+                st.subheader("📊 Statistics")
+                if successful > 0:
+                    st.json({
+                        "success_rate": f"{successful/total_articles*100:.1f}%",
+                        "articles_by_year": dict(df[df['year'] != 'Unknown']['year'].value_counts()),
+                        "citation_stats": {
+                            "mean": f"{df['citation_count'].mean():.1f}",
+                            "median": f"{df['citation_count'].median():.1f}",
+                            "max": int(df['citation_count'].max()),
+                            "min": int(df['citation_count'].min())
+                        }
+                    })
+                
             else:
-                st.error("No valid DOIs found. Please check the input format.")
+                st.error("No valid DOIs to analyze")
         else:
-            st.error("Please enter at least one DOI.")
+            st.error("Please enter at least one DOI")
 
 if __name__ == "__main__":
     main()
