@@ -1482,51 +1482,110 @@ class FullCitationAnalyzer:
         except:
             return pd.DataFrame()
 
-    # Основные методы анализа
+    # Основные методы анализа с улучшенным прогрессом
     def analyze_references_comprehensive(self, doi_list: List[str]) -> pd.DataFrame:
-        """Полный анализ ссылок"""
+        """Полный анализ ссылок с детальным прогрессом"""
         st.info(f"🔍 Начинаем анализ ссылок для {len(doi_list)} статей...")
         
         # Контейнеры для прогресса
         main_progress = st.progress(0)
         main_status = st.empty()
+        step_progress = st.empty()
+        step_status = st.empty()
         
         # Шаг 1: Получаем данные исходных статей
-        main_status.text("📊 Шаг 1/4: Получение данных исходных статей...")
+        main_status.text("📊 Шаг 1/5: Получение данных исходных статей...")
+        step_status.text("Получение метаданных статей...")
         source_articles_data = self.get_article_data_batch(doi_list)
-        main_progress.progress(0.25)
+        main_progress.progress(0.2)
         
         # Шаг 2: Собираем все ссылки
-        main_status.text("📊 Шаг 2/4: Сбор ссылок на статьи...")
+        main_status.text("📊 Шаг 2/5: Сбор ссылок на статьи...")
+        step_status.text("Сбор библиографии...")
         all_references = self.get_references_batch(doi_list)
-        main_progress.progress(0.5)
+        main_progress.progress(0.4)
         
         # Шаг 3: Собираем все DOI ссылок
-        main_status.text("📊 Шаг 3/4: Подготовка данных ссылок...")
+        main_status.text("📊 Шаг 3/5: Подготовка данных ссылок...")
+        step_status.text("Извлечение DOI из ссылок...")
         all_reference_dois = set()
-        for references in all_references.values():
+        reference_titles = []
+        
+        total_refs = sum(len(refs) for refs in all_references.values())
+        processed_refs = 0
+        
+        for source_doi, references in all_references.items():
             for ref in references:
                 ref_doi = ref.get('DOI')
+                title = ref.get('article-title', 'Unknown')
+                reference_titles.append(title)
+                
                 if ref_doi and self.validate_doi(ref_doi):
                     all_reference_dois.add(ref_doi)
-                else:
-                    # Fallback: поиск DOI по заголовку
-                    title = ref.get('article-title', 'Unknown')
-                    if title != 'Unknown':
-                        found_doi = self.quick_doi_search(title)
-                        if found_doi:
-                            all_reference_dois.add(found_doi)
+                processed_refs += 1
+                
+                # Обновляем прогресс каждые 10 ссылок
+                if processed_refs % 10 == 0:
+                    progress_pct = processed_refs / total_refs * 100
+                    step_progress.progress(progress_pct / 100)
+                    step_status.text(f"Обработано {processed_refs}/{total_refs} ссылок ({progress_pct:.1f}%)")
         
-        # Шаг 4: Получаем данные всех ссылок
-        main_status.text("📊 Шаг 4/4: Получение данных ссылок...")
+        main_progress.progress(0.6)
+        
+        # Шаг 4: Поиск DOI по заголовкам для ссылок без DOI
+        main_status.text("📊 Шаг 4/5: Поиск DOI по заголовкам...")
+        step_status.text("Поиск недостающих DOI...")
+        
+        titles_to_search = [title for title in reference_titles if title != 'Unknown']
+        total_titles = len(titles_to_search)
+        found_dois = 0
+        
+        for i, title in enumerate(titles_to_search):
+            found_doi = self.quick_doi_search(title)
+            if found_doi:
+                all_reference_dois.add(found_doi)
+                found_dois += 1
+            
+            # Обновляем прогресс
+            if i % 5 == 0:
+                progress_pct = (i + 1) / total_titles * 100
+                step_progress.progress(progress_pct / 100)
+                step_status.text(f"Найдено DOI: {found_dois}/{i+1} ({progress_pct:.1f}%)")
+            
+            time.sleep(0.1)  # Чтобы не перегружать API
+        
+        main_progress.progress(0.8)
+        
+        # Шаг 5: Получаем данные всех ссылок
+        main_status.text("📊 Шаг 5/5: Получение данных ссылок...")
+        step_status.text("Загрузка метаданных ссылок...")
+        
         if all_reference_dois:
-            reference_articles_data = self.get_article_data_batch(list(all_reference_dois))
+            reference_dois_list = list(all_reference_dois)
+            total_ref_dois = len(reference_dois_list)
+            
+            # Разбиваем на батчи для лучшего отображения прогресса
+            batch_size = 50
+            reference_articles_data = {}
+            
+            for i in range(0, total_ref_dois, batch_size):
+                batch_dois = reference_dois_list[i:i + batch_size]
+                batch_data = self.get_article_data_batch(batch_dois)
+                reference_articles_data.update(batch_data)
+                
+                # Обновляем прогресс
+                progress_pct = min((i + batch_size) / total_ref_dois * 100, 100)
+                step_progress.progress(progress_pct / 100)
+                step_status.text(f"Загружено {min(i + batch_size, total_ref_dois)}/{total_ref_dois} ссылок ({progress_pct:.1f}%)")
         else:
             reference_articles_data = {}
         
-        main_progress.progress(0.75)
+        main_progress.progress(1.0)
         
         # Собираем все данные
+        main_status.text("📊 Сборка финального датасета...")
+        step_status.text("Объединение данных...")
+        
         all_data = []
         
         # Добавляем исходные статьи
@@ -1536,6 +1595,9 @@ class FullCitationAnalyzer:
             all_data.append(data)
         
         # Добавляем ссылки
+        processed_connections = 0
+        total_connections = sum(len(refs) for refs in all_references.values())
+        
         for source_doi, references in all_references.items():
             for i, ref in enumerate(references):
                 ref_doi = ref.get('DOI')
@@ -1586,46 +1648,80 @@ class FullCitationAnalyzer:
                             'type': 'reference',
                             'error': f"Invalid DOI: {ref_doi}"
                         })
+                
+                processed_connections += 1
+                if processed_connections % 10 == 0:
+                    progress_pct = processed_connections / total_connections * 100
+                    step_progress.progress(progress_pct / 100)
+                    step_status.text(f"Обработано связей: {processed_connections}/{total_connections} ({progress_pct:.1f}%)")
         
-        main_progress.progress(1.0)
         main_status.text("✅ Анализ ссылок завершен!")
+        step_status.text("")
+        step_progress.empty()
         
         return pd.DataFrame(all_data)
 
     def analyze_citations_comprehensive(self, doi_list: List[str]) -> pd.DataFrame:
-        """Полный анализ цитирований"""
+        """Полный анализ цитирований с детальным прогрессом"""
         st.info(f"🔍 Начинаем анализ цитирований для {len(doi_list)} статей...")
         
         # Контейнеры для прогресса
         main_progress = st.progress(0)
         main_status = st.empty()
+        step_progress = st.empty()
+        step_status = st.empty()
         
         # Шаг 1: Получаем данные исходных статей
         main_status.text("📊 Шаг 1/4: Получение данных исходных статей...")
+        step_status.text("Получение метаданных статей...")
         source_articles_data = self.get_article_data_batch(doi_list)
         main_progress.progress(0.25)
         
         # Шаг 2: Собираем все цитирующие статьи
         main_status.text("📊 Шаг 2/4: Поиск цитирующих статей...")
+        step_status.text("Поиск статей, цитирующих исходные...")
         all_citing_articles = self.get_citing_articles_batch(doi_list)
         main_progress.progress(0.5)
         
         # Шаг 3: Собираем все DOI цитирующих статей
         main_status.text("📊 Шаг 3/4: Подготовка данных цитирований...")
+        step_status.text("Сбор DOI цитирующих статей...")
         all_citing_dois = set()
         for citing_dois in all_citing_articles.values():
             all_citing_dois.update(citing_dois)
         
+        main_progress.progress(0.75)
+        
         # Шаг 4: Получаем данные всех цитирующих статей
         main_status.text("📊 Шаг 4/4: Получение данных цитирующих статей...")
+        step_status.text("Загрузка метаданных цитирующих статей...")
+        
         if all_citing_dois:
-            citing_articles_data = self.get_article_data_batch(list(all_citing_dois))
+            citing_dois_list = list(all_citing_dois)
+            total_citing_dois = len(citing_dois_list)
+            
+            # Разбиваем на батчи для лучшего отображения прогресса
+            batch_size = 50
+            citing_articles_data = {}
+            
+            for i in range(0, total_citing_dois, batch_size):
+                batch_dois = citing_dois_list[i:i + batch_size]
+                batch_data = self.get_article_data_batch(batch_dois)
+                citing_articles_data.update(batch_data)
+                
+                # Обновляем прогресс
+                progress_pct = min((i + batch_size) / total_citing_dois * 100, 100)
+                step_progress.progress(progress_pct / 100)
+                step_status.text(f"Загружено {min(i + batch_size, total_citing_dois)}/{total_citing_dois} цитирований ({progress_pct:.1f}%)")
         else:
             citing_articles_data = {}
         
-        main_progress.progress(0.75)
+        main_progress.progress(1.0)
         
         # Собираем все данные
+        main_status.text("📊 Сборка финального датасета...")
+        step_status.text("Объединение данных...")
+        
         all_data = []
         
         # Добавляем исходные статьи
@@ -1635,6 +1731,9 @@ class FullCitationAnalyzer:
             all_data.append(data)
         
         # Добавляем цитирующие статьи
+        total_citing = sum(len(citing_dois) for citing_dois in all_citing_articles.values())
+        processed_citing = 0
+        
         for source_doi, citing_dois in all_citing_articles.items():
             for citing_doi in citing_dois:
                 if self.validate_doi(citing_doi):
@@ -1643,9 +1742,16 @@ class FullCitationAnalyzer:
                         citing_data['type'] = 'citation'
                         citing_data['source_doi'] = source_doi
                         all_data.append(citing_data)
+                
+                processed_citing += 1
+                if processed_citing % 10 == 0:
+                    progress_pct = processed_citing / total_citing * 100
+                    step_progress.progress(progress_pct / 100)
+                    step_status.text(f"Обработано цитирований: {processed_citing}/{total_citing} ({progress_pct:.1f}%)")
         
-        main_progress.progress(1.0)
         main_status.text("✅ Анализ цитирований завершен!")
+        step_status.text("")
+        step_progress.empty()
         
         return pd.DataFrame(all_data)
 
@@ -2072,16 +2178,24 @@ def main():
                     col1, col2 = st.columns(2)
                     
                     with col1:
-                        # Распределение по годам
+                        # Распределение по годам - ИСПРАВЛЕННАЯ ЧАСТЬ
                         year_df = analyzer.analyze_year_distribution(references_df)
-                        if not year_df.empty:
-                            st.bar_chart(year_df.set_index('year')['frequency'].head(15))
+                        if not year_df.empty and 'frequency_total' in year_df.columns:
+                            # Создаем временный DataFrame для визуализации
+                            viz_df = year_df[['year', 'frequency_total']].set_index('year')
+                            st.bar_chart(viz_df.head(15))
+                        else:
+                            st.info("Нет данных для визуализации по годам")
                     
                     with col2:
-                        # Топ журналов
+                        # Топ журналов - ИСПРАВЛЕННАЯ ЧАСТЬ
                         journal_df = analyzer.analyze_journals_frequency(references_df)
-                        if not journal_df.empty:
-                            st.bar_chart(journal_df.set_index('journal')['frequency'].head(10))
+                        if not journal_df.empty and 'frequency_total' in journal_df.columns:
+                            # Создаем временный DataFrame для визуализации
+                            viz_df = journal_df[['journal_abbreviation', 'frequency_total']].set_index('journal_abbreviation')
+                            st.bar_chart(viz_df.head(10))
+                        else:
+                            st.info("Нет данных для визуализации по журналам")
                     
                     # Детальные данные
                     st.subheader("📋 Детальные данные")
@@ -2249,16 +2363,22 @@ def main():
                     col1, col2 = st.columns(2)
                     
                     with col1:
-                        # Распределение по годам
+                        # Распределение по годам - ИСПРАВЛЕННАЯ ЧАСТЬ
                         year_df = analyzer.analyze_year_distribution(citations_df)
-                        if not year_df.empty:
-                            st.bar_chart(year_df.set_index('year')['frequency'].head(15))
+                        if not year_df.empty and 'frequency_total' in year_df.columns:
+                            viz_df = year_df[['year', 'frequency_total']].set_index('year')
+                            st.bar_chart(viz_df.head(15))
+                        else:
+                            st.info("Нет данных для визуализации по годам")
                     
                     with col2:
-                        # Топ цитирующих журналов
+                        # Топ цитирующих журналов - ИСПРАВЛЕННАЯ ЧАСТЬ
                         citing_journals_df = analyzer.analyze_journals_frequency(citations_df[citations_df['type'] == 'citation'])
-                        if not citing_journals_df.empty:
-                            st.bar_chart(citing_journals_df.set_index('journal')['frequency'].head(10))
+                        if not citing_journals_df.empty and 'frequency_total' in citing_journals_df.columns:
+                            viz_df = citing_journals_df[['journal_abbreviation', 'frequency_total']].set_index('journal_abbreviation')
+                            st.bar_chart(viz_df.head(10))
+                        else:
+                            st.info("Нет данных для визуализации по журналам")
                     
                     # Детальные данные
                     st.subheader("📋 Детальные данные")
