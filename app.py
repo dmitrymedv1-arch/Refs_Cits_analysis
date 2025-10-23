@@ -2346,7 +2346,7 @@ def main():
                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                 key='download_excel_refs'
                             )
-                                st.success("✅ Excel отчет создан!")
+                            st.success("✅ Excel отчет создан!")
                             else:
                                 st.error("❌ Ошибка при создании Excel отчета")
                 else:
@@ -2533,6 +2533,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
