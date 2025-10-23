@@ -40,11 +40,14 @@ def get_temp_file_path(filename: str) -> str:
 
 def create_download_link(file_path: str, filename: str, link_text: str) -> str:
     """Создает HTML ссылку для скачивания файла"""
-    with open(file_path, 'rb') as f:
-        data = f.read()
-    b64 = base64.b64encode(data).decode()
-    href = f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}">{link_text}</a>'
-    return href
+    try:
+        with open(file_path, 'rb') as f:
+            data = f.read()
+        b64 = base64.b64encode(data).decode()
+        href = f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-align: center; text-decoration: none; display: inline-block; border-radius: 5px; font-weight: bold;">{link_text}</a>'
+        return href
+    except Exception as e:
+        return f"<p>Ошибка создания ссылки: {str(e)}</p>"
 
 def cleanup_temp_files():
     """Очищает временные файлы старше 1 часа"""
@@ -148,6 +151,7 @@ class FastAffiliationProcessor:
             main_org_candidates.sort(key=len, reverse=True)
             main_org = main_org_candidates[0]
         else:
+            main_org = clean_affiliation
             for part in parts:
                 part = part.strip()
                 if len(part) > 10 and not any(country in part.lower() for country in self.country_keywords):
@@ -383,8 +387,12 @@ class FullCitationAnalyzer:
         
         # NLP компоненты
         if NLTK_AVAILABLE:
-            self.stop_words = set(stopwords.words('english'))
-            self.stemmer = PorterStemmer()
+            try:
+                self.stop_words = set(stopwords.words('english'))
+                self.stemmer = PorterStemmer()
+            except:
+                self.stop_words = set()
+                self.stemmer = None
         else:
             self.stop_words = {
                 'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you', "you're", "you've", 
@@ -821,7 +829,7 @@ class FullCitationAnalyzer:
             if title_list:
                 title = title_list[0]
 
-        # Год публикации - ИСПРАВЛЕННАЯ ЧАСТЬ
+        # Год публикации
         year = 'Unknown'
         publication_year = None
         
@@ -831,7 +839,6 @@ class FullCitationAnalyzer:
                 year = str(publication_year)
             elif crossref_data.get('issued', {}).get('date-parts', [[]])[0]:
                 year_str = str(crossref_data['issued']['date-parts'][0][0])
-                # Безопасное преобразование года
                 if year_str.isdigit() and len(year_str) == 4:
                     publication_year = int(year_str)
                     year = year_str
@@ -981,7 +988,6 @@ class FullCitationAnalyzer:
             if year_match:
                 year = int(year_match.group())
             else:
-                # Пытаемся извлечь год любым способом
                 try:
                     year = int(year_str)
                 except ValueError:
@@ -1000,7 +1006,6 @@ class FullCitationAnalyzer:
             if not isinstance(citation_count, (int, float)) or citation_count == 0:
                 return 0.0
 
-            # Если год публикации None, используем 1 год для расчета
             if publication_year is None:
                 return float(citation_count)
 
@@ -1167,7 +1172,7 @@ class FullCitationAnalyzer:
         if references_df.empty:
             return pd.DataFrame()
 
-        cache_key = id(references_df)
+        cache_key = str(references_df.shape) + str(hash(str(references_df.columns.tolist())))
         if cache_key not in self._unique_references_cache:
             references_df['ref_id'] = references_df['doi'].fillna('') + '|' + references_df['title'].fillna('')
             unique_df = references_df.drop_duplicates(subset=['ref_id'], keep='first').drop(columns=['ref_id'])
@@ -1179,7 +1184,7 @@ class FullCitationAnalyzer:
         if citations_df.empty:
             return pd.DataFrame()
 
-        cache_key = id(citations_df)
+        cache_key = str(citations_df.shape) + str(hash(str(citations_df.columns.tolist())))
         if cache_key not in self._unique_citations_cache:
             citations_df['citation_id'] = citations_df['doi'].fillna('') + '|' + citations_df['title'].fillna('')
             unique_df = citations_df.drop_duplicates(subset=['citation_id'], keep='first').drop(columns=['citation_id'])
@@ -1434,7 +1439,7 @@ class FullCitationAnalyzer:
             year_counts_total['percentage_total'] = round(year_counts_total['frequency_total'] / total_refs * 100, 2)
 
             years_unique = pd.to_numeric(unique_df['year'], errors='coerce')
-            years_unique = years_unique[years_unique.notna() & years_unique.between(1900, 2026)].astyname()
+            years_unique = years_unique[years_unique.notna() & years_unique.between(1900, 2026)].astype(int)
             year_counts_unique = years_unique.value_counts().reset_index()
             year_counts_unique.columns = ['year', 'frequency_unique']
             year_counts_unique['percentage_unique'] = round(year_counts_unique['frequency_unique'] / total_unique * 100, 2)
@@ -1535,54 +1540,54 @@ class FullCitationAnalyzer:
             return pd.DataFrame()
 
     # Основные методы анализа с улучшенным прогрессом
-        def analyze_references_comprehensive(self, doi_list: List[str]) -> pd.DataFrame:
-            """Полный анализ ссылок с детальным прогрессом"""
+    def analyze_references_comprehensive(self, doi_list: List[str]) -> pd.DataFrame:
+        """Полный анализ ссылок с детальным прогрессом"""
         st.info(f"🔍 Начинаем анализ ссылок для {len(doi_list)} статей...")
-    
+        
         # Контейнеры для прогресса
         main_progress = st.progress(0)
         main_status = st.empty()
         step_progress = st.empty()
         step_status = st.empty()
-    
+        
         # Шаг 1: Получаем данные исходных статей
         main_status.text("📊 Шаг 1/5: Получение данных исходных статей...")
         step_status.text("Получение метаданных статей...")
         source_articles_data = self.get_article_data_batch(doi_list)
         main_progress.progress(0.2)
-    
+        
         # Шаг 2: Собираем все ссылки
         main_status.text("📊 Шаг 2/5: Сбор ссылок на статьи...")
         step_status.text("Сбор библиографии...")
         all_references = self.get_references_batch(doi_list)
         main_progress.progress(0.4)
-    
+        
         # Шаг 3: Собираем все DOI ссылок
         main_status.text("📊 Шаг 3/5: Подготовка данных ссылок...")
         step_status.text("Извлечение DOI из ссылок...")
         all_reference_dois = set()
         reference_titles = []
-    
+        
         total_refs = sum(len(refs) for refs in all_references.values())
         processed_refs = 0
-    
+        
         # ИСПРАВЛЕНИЕ: используем .items() вместо .values()
-        for source_doi, references in all_references.items():  # ← ИСПРАВЛЕНО ЗДЕСЬ
+        for source_doi, references in all_references.items():
             for ref in references:
                 ref_doi = ref.get('DOI')
                 title = ref.get('article-title', 'Unknown')
                 reference_titles.append(title)
-            
+                
                 if ref_doi and self.validate_doi(ref_doi):
                     all_reference_dois.add(ref_doi)
                 processed_refs += 1
-            
+                
                 # Обновляем прогресс каждые 10 ссылок
                 if processed_refs % 10 == 0:
                     progress_pct = processed_refs / total_refs * 100
                     step_progress.progress(progress_pct / 100)
                     step_status.text(f"Обработано {processed_refs}/{total_refs} ссылок ({progress_pct:.1f}%)")
-    
+        
         main_progress.progress(0.6)
         
         # Шаг 4: Поиск DOI по заголовкам для ссылок без DOI
@@ -1651,6 +1656,7 @@ class FullCitationAnalyzer:
         processed_connections = 0
         total_connections = sum(len(refs) for refs in all_references.values())
         
+        # ИСПРАВЛЕНИЕ: снова используем .items() для итерации
         for source_doi, references in all_references.items():
             for i, ref in enumerate(references):
                 ref_doi = ref.get('DOI')
@@ -1699,7 +1705,7 @@ class FullCitationAnalyzer:
                             'rss_blogs': 0,
                             'unique_accounts': 0,
                             'type': 'reference',
-                            'error': f"Invalid DOI: {ref_doi}"
+                            'error': f"Invalid DOI: {ref_doi}" if ref_doi else "No DOI found"
                         })
                 
                 processed_connections += 1
@@ -1712,7 +1718,24 @@ class FullCitationAnalyzer:
         step_status.text("")
         step_progress.empty()
         
-        return pd.DataFrame(all_data)
+        # Создаем DataFrame и добавляем недостающие колонки
+        result_df = pd.DataFrame(all_data)
+        
+        # Добавляем недостающие колонки, если их нет
+        expected_columns = [
+            'doi', 'title', 'year', 'publication_year', 'authors', 'authors_with_initials', 
+            'author_count', 'journal_full_name', 'journal_abbreviation', 'publisher',
+            'citation_count_crossref', 'citation_count_openalex', 'annual_citation_rate_crossref',
+            'annual_citation_rate_openalex', 'years_since_publication', 'affiliations', 
+            'countries', 'altmetric_score', 'number_of_mentions', 'x_mentions', 'rss_blogs',
+            'unique_accounts', 'type', 'source_doi', 'position', 'error'
+        ]
+        
+        for col in expected_columns:
+            if col not in result_df.columns:
+                result_df[col] = None
+        
+        return result_df
 
     def analyze_citations_comprehensive(self, doi_list: List[str]) -> pd.DataFrame:
         """Полный анализ цитирований с детальным прогрессом"""
@@ -1806,7 +1829,24 @@ class FullCitationAnalyzer:
         step_status.text("")
         step_progress.empty()
         
-        return pd.DataFrame(all_data)
+        # Создаем DataFrame и добавляем недостающие колонки
+        result_df = pd.DataFrame(all_data)
+        
+        # Добавляем недостающие колонки, если их нет
+        expected_columns = [
+            'doi', 'title', 'year', 'publication_year', 'authors', 'authors_with_initials', 
+            'author_count', 'journal_full_name', 'journal_abbreviation', 'publisher',
+            'citation_count_crossref', 'citation_count_openalex', 'annual_citation_rate_crossref',
+            'annual_citation_rate_openalex', 'years_since_publication', 'affiliations', 
+            'countries', 'altmetric_score', 'number_of_mentions', 'x_mentions', 'rss_blogs',
+            'unique_accounts', 'type', 'source_doi'
+        ]
+        
+        for col in expected_columns:
+            if col not in result_df.columns:
+                result_df[col] = None
+        
+        return result_df
 
     # ИСПРАВЛЕННЫЕ МЕТОДЫ ЭКСПОРТА В EXCEL С СОХРАНЕНИЕМ ВО ВРЕМЕННЫЕ ФАЙЛЫ
     def save_references_analysis_to_excel(self, references_df: pd.DataFrame, source_articles_df: pd.DataFrame,
@@ -2268,20 +2308,18 @@ def main():
                     col1, col2 = st.columns(2)
                     
                     with col1:
-                        # Распределение по годам - ИСПРАВЛЕННАЯ ЧАСТЬ
+                        # Распределение по годам
                         year_df = analyzer.analyze_year_distribution(references_df)
                         if not year_df.empty and 'frequency_total' in year_df.columns:
-                            # Создаем временный DataFrame для визуализации
                             viz_df = year_df[['year', 'frequency_total']].set_index('year')
                             st.bar_chart(viz_df.head(15))
                         else:
                             st.info("Нет данных для визуализации по годам")
                     
                     with col2:
-                        # Топ журналов - ИСПРАВЛЕННАЯ ЧАСТЬ
+                        # Топ журналов
                         journal_df = analyzer.analyze_journals_frequency(references_df)
                         if not journal_df.empty and 'frequency_total' in journal_df.columns:
-                            # Создаем временный DataFrame для визуализации
                             viz_df = journal_df[['journal_abbreviation', 'frequency_total']].set_index('journal_abbreviation')
                             st.bar_chart(viz_df.head(10))
                         else:
@@ -2355,7 +2393,7 @@ def main():
                         if not duplicates_df.empty:
                             st.dataframe(duplicates_df.head(20), use_container_width=True)
                     
-                    # Экспорт в Excel - ИСПРАВЛЕННАЯ ЧАСТЬ
+                    # Экспорт в Excel
                     st.subheader("💾 Экспорт данных")
                     
                     if st.button("📊 Создать полный отчет Excel", key="excel_refs"):
@@ -2468,7 +2506,7 @@ def main():
                     col1, col2 = st.columns(2)
                     
                     with col1:
-                        # Распределение по годам - ИСПРАВЛЕННАЯ ЧАСТЬ
+                        # Распределение по годам
                         year_df = analyzer.analyze_year_distribution(citations_df)
                         if not year_df.empty and 'frequency_total' in year_df.columns:
                             viz_df = year_df[['year', 'frequency_total']].set_index('year')
@@ -2477,7 +2515,7 @@ def main():
                             st.info("Нет данных для визуализации по годам")
                     
                     with col2:
-                        # Топ цитирующих журналов - ИСПРАВЛЕННАЯ ЧАСТЬ
+                        # Топ цитирующих журналов
                         citing_journals_df = analyzer.analyze_journals_frequency(citations_df[citations_df['type'] == 'citation'])
                         if not citing_journals_df.empty and 'frequency_total' in citing_journals_df.columns:
                             viz_df = citing_journals_df[['journal_abbreviation', 'frequency_total']].set_index('journal_abbreviation')
@@ -2554,7 +2592,7 @@ def main():
                         if not citing_duplicates_df.empty:
                             st.dataframe(citing_duplicates_df.head(20), use_container_width=True)
                     
-                    # Экспорт в Excel - ИСПРАВЛЕННАЯ ЧАСТЬ
+                    # Экспорт в Excel
                     st.subheader("💾 Экспорт данных")
                     
                     if st.button("📊 Создать полный отчет Excel", key="excel_cits"):
@@ -2596,4 +2634,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
