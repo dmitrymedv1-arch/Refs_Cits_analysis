@@ -2348,8 +2348,8 @@ def main():
                             )
                             
                             st.success("✅ Excel отчет создан!")
-                            else:
-                                st.error("❌ Ошибка при создании Excel отчета")
+                        else:
+                            st.error("❌ Ошибка при создании Excel отчета")
                 else:
                     st.error("❌ Не удалось получить данные")
         else:
@@ -2534,6 +2534,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
