@@ -966,7 +966,7 @@ class FullCitationAnalyzer:
         """Безопасный расчет ежегодной цитируемости"""
         try:
             if not isinstance(citation_count, (int, float)) or citation_count == 0:
-            return 0.0
+                return 0.0
 
             # Если год публикации None, используем 1 год для расчета
             if publication_year is None:
@@ -2500,4 +2500,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
