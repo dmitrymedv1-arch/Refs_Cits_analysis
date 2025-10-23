@@ -19,23 +19,47 @@ st.set_page_config(
     layout="wide"
 )
 
-# Попытка импорта NLTK с обработкой ошибок
-try:
-    import nltk
+# Грамотная инициализация NLTK с обработкой всех возможных ошибок
+def initialize_nltk():
+    """Инициализация NLTK с обработкой ошибок"""
     try:
-        nltk.data.find('corpora/stopwords')
-    except LookupError:
-        try:
-            nltk.download('stopwords', quiet=True)
-        except:
-            st.warning("NLTK stopwords не доступны. Используем базовые стоп-слова.")
-    
-    from nltk.corpus import stopwords
-    from nltk.stem import PorterStemmer
-    NLTK_AVAILABLE = True
-except ImportError:
-    NLTK_AVAILABLE = False
-    st.warning("NLTK не установлен. Используем упрощенную обработку текста.")
+        import nltk
+        
+        # Создаем папку для данных NLTK если нужно
+        nltk_data_dir = os.path.join(os.path.expanduser('~'), 'nltk_data')
+        os.makedirs(nltk_data_dir, exist_ok=True)
+        
+        # Проверяем и загружаем необходимые данные
+        resources = {
+            'corpora/stopwords': 'stopwords',
+            'tokenizers/punkt': 'punkt'
+        }
+        
+        for resource_path, resource_name in resources.items():
+            try:
+                nltk.data.find(resource_path)
+            except LookupError:
+                try:
+                    print(f"📥 Загрузка NLTK данных: {resource_name}...")
+                    nltk.download(resource_name, quiet=True)
+                    print(f"✅ {resource_name} загружены")
+                except Exception as e:
+                    print(f"⚠️ Не удалось загрузить {resource_name}: {e}")
+        
+        from nltk.corpus import stopwords
+        from nltk.stem import PorterStemmer
+        
+        return nltk, stopwords, PorterStemmer, True
+        
+    except ImportError as e:
+        print(f"❌ NLTK не установлен: {e}")
+        return None, None, None, False
+    except Exception as e:
+        print(f"❌ Ошибка инициализации NLTK: {e}")
+        return None, None, None, False
+
+# Инициализируем NLTK
+nltk, stopwords_module, PorterStemmer, NLTK_AVAILABLE = initialize_nltk()
 
 class Config:
     REQUEST_TIMEOUT = 30
@@ -198,12 +222,12 @@ class FullCitationAnalyzer:
         self.fast_affiliation_processor = FastAffiliationProcessor()
         self.altmetric_processor = AltmetricProcessor()
         
-        # NLP компоненты (с обработкой отсутствия NLTK)
-        if NLTK_AVAILABLE:
-            self.stop_words = set(stopwords.words('english'))
+        # NLP компоненты
+        if NLTK_AVAILABLE and stopwords_module and PorterStemmer:
+            self.stop_words = set(stopwords_module.words('english'))
             self.stemmer = PorterStemmer()
         else:
-            # Базовые стоп-слова если NLTK недоступен
+            # Базовые стоп-сwords если NLTK недоступен
             self.stop_words = {
                 'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you', "you're", "you've", 
                 "you'll", "you'd", 'your', 'yours', 'yourself', 'yourselves', 'he', 'him', 'his', 'himself', 
@@ -239,7 +263,7 @@ class FullCitationAnalyzer:
             'nanostructures', 'composite', 'composites', 'coating', 'coatings'
         }
         
-        if NLTK_AVAILABLE and self.stemmer:
+        if self.stemmer:
             self.scientific_stopwords_stemmed = {self.stemmer.stem(word) for word in self.scientific_stopwords}
         else:
             self.scientific_stopwords_stemmed = self.scientific_stopwords
@@ -324,13 +348,12 @@ class FullCitationAnalyzer:
         
         return cleaned_dois
 
-    def get_crossref_data_batch(self, dois: List[str], progress_bar=None, status_text=None) -> Dict[str, Dict]:
+    def get_crossref_data_batch(self, dois: List[str]) -> Dict[str, Dict]:
         """Получает данные из Crossref для нескольких DOI сразу"""
         results = {}
         total_dois = len(dois)
         
-        if status_text:
-            status_text.text("📡 Получение данных из Crossref...")
+        print(f"📡 Получение данных из Crossref для {total_dois} DOI...")
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             future_to_doi = {
@@ -346,11 +369,9 @@ class FullCitationAnalyzer:
                 except Exception as e:
                     results[doi] = {}
                 
-                if progress_bar and total_dois > 0:
-                    progress_bar.progress((i + 1) / total_dois)
-                
                 time.sleep(Config.DELAY_BETWEEN_REQUESTS)
         
+        print(f"✅ Данные Crossref получены для {len(results)} DOI")
         return results
 
     def _get_single_crossref_data(self, doi: str) -> Dict:
@@ -431,13 +452,12 @@ class FullCitationAnalyzer:
 
         return ""
 
-    def get_openalex_data_batch(self, dois: List[str], progress_bar=None, status_text=None) -> Dict[str, Dict]:
+    def get_openalex_data_batch(self, dois: List[str]) -> Dict[str, Dict]:
         """Получает данные из OpenAlex для нескольких DOI сразу"""
         results = {}
         total_dois = len(dois)
         
-        if status_text:
-            status_text.text("📡 Получение данных из OpenAlex...")
+        print(f"📡 Получение данных из OpenAlex для {total_dois} DOI...")
         
         # OpenAlex batch запросы
         batch_size = 50
@@ -457,9 +477,6 @@ class FullCitationAnalyzer:
                             clean_doi = self.normalize_doi(work['doi'])
                             self._openalex_cache[clean_doi] = work
                             results[clean_doi] = work
-                
-                if progress_bar and total_dois > 0:
-                    progress_bar.progress(min((i + batch_size) / total_dois, 1.0))
                     
             except Exception as e:
                 continue
@@ -469,8 +486,7 @@ class FullCitationAnalyzer:
         # Индивидуальные запросы для отсутствующих DOI
         missing_dois = set(dois) - set(results.keys())
         if missing_dois:
-            if status_text:
-                status_text.text("📡 Дозагрузка отсутствующих данных из OpenAlex...")
+            print(f"📡 Дозагрузка {len(missing_dois)} отсутствующих данных из OpenAlex...")
             
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
                 future_to_doi = {
@@ -478,17 +494,15 @@ class FullCitationAnalyzer:
                     for doi in missing_dois
                 }
                 
-                for i, future in enumerate(concurrent.futures.as_completed(future_to_doi)):
+                for future in concurrent.futures.as_completed(future_to_doi):
                     doi = future_to_doi[future]
                     try:
                         data = future.result()
                         results[doi] = data
                     except Exception:
                         results[doi] = {}
-                    
-                    if progress_bar and len(missing_dois) > 0:
-                        progress_bar.progress((len(dois) - len(missing_dois) + i + 1) / total_dois)
         
+        print(f"✅ Данные OpenAlex получены для {len(results)} DOI")
         return results
 
     def _get_single_openalex_data(self, doi: str) -> Dict:
@@ -513,19 +527,14 @@ class FullCitationAnalyzer:
                 
         return {}
 
-    def get_article_data_batch(self, dois: List[str], progress_container=None) -> Dict[str, Dict]:
+    def get_article_data_batch(self, dois: List[str]) -> Dict[str, Dict]:
         """Получает полные данные о статьях"""
-        if progress_container:
-            progress_bar = progress_container.progress(0)
-            status_text = progress_container.empty()
-        else:
-            progress_bar = None
-            status_text = None
+        print(f"📊 Получение данных для {len(dois)} статей...")
         
         # Получаем данные из обоих источников параллельно
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            crossref_future = executor.submit(self.get_crossref_data_batch, dois, progress_bar, status_text)
-            openalex_future = executor.submit(self.get_openalex_data_batch, dois, progress_bar, status_text)
+            crossref_future = executor.submit(self.get_crossref_data_batch, dois)
+            openalex_future = executor.submit(self.get_openalex_data_batch, dois)
             
             crossref_results = crossref_future.result()
             openalex_results = openalex_future.result()
@@ -540,11 +549,7 @@ class FullCitationAnalyzer:
             article_data = self._combine_article_data(doi, crossref_data, openalex_data, altmetric_data)
             results[doi] = article_data
         
-        if progress_bar:
-            progress_bar.progress(1.0)
-        if status_text:
-            status_text.text("✅ Данные статей получены!")
-            
+        print(f"✅ Данные статей получены для {len(results)} DOI")
         return results
 
     def _combine_article_data(self, doi: str, crossref_data: Dict, openalex_data: Dict, altmetric_data: Dict) -> Dict[str, Any]:
@@ -741,56 +746,31 @@ class FullCitationAnalyzer:
         initial = parts[0][0].upper() if parts[0] else ''
         return f"{surname} {initial}." if initial else surname
 
-    def get_references_batch(self, doi_list: List[str], progress_container=None) -> Dict[str, List[Dict]]:
+    def get_references_batch(self, doi_list: List[str]) -> Dict[str, List[Dict]]:
         """Получает ссылки для списка DOI"""
-        all_references = {}
-        total_articles = len(doi_list)
-        
-        if progress_container:
-            progress_bar = progress_container.progress(0)
-            status_text = progress_container.empty()
-        else:
-            progress_bar = None
-            status_text = None
-        
-        if status_text:
-            status_text.text("🔍 Сбор ссылок на статьи...")
+        print(f"🔍 Сбор ссылок для {len(doi_list)} статей...")
         
         # Получаем данные Crossref для всех DOI
-        crossref_data = self.get_crossref_data_batch(doi_list, progress_bar, status_text)
+        crossref_data = self.get_crossref_data_batch(doi_list)
         
-        for i, doi in enumerate(doi_list):
+        all_references = {}
+        for doi in doi_list:
             data = crossref_data.get(doi, {})
             references = data.get('reference', [])
             all_references[doi] = references
-            
-            if progress_bar and total_articles > 0:
-                progress_bar.progress((i + 1) / total_articles)
         
-        if status_text:
-            status_text.text("✅ Ссылки собраны!")
-            
+        print(f"✅ Ссылки собраны для {len(doi_list)} статей")
         return all_references
 
-    def get_citing_articles_batch(self, doi_list: List[str], progress_container=None) -> Dict[str, List[str]]:
+    def get_citing_articles_batch(self, doi_list: List[str]) -> Dict[str, List[str]]:
         """Получает цитирующие статьи для списка DOI"""
-        all_citing_articles = {}
-        total_articles = len(doi_list)
-        
-        if progress_container:
-            progress_bar = progress_container.progress(0)
-            status_text = progress_container.empty()
-        else:
-            progress_bar = None
-            status_text = None
-        
-        if status_text:
-            status_text.text("🔍 Поиск цитирующих статей...")
+        print(f"🔍 Поиск цитирующих статей для {len(doi_list)} статей...")
         
         # Получаем данные OpenAlex для поиска цитирований
-        openalex_data = self.get_openalex_data_batch(doi_list, progress_bar, status_text)
+        openalex_data = self.get_openalex_data_batch(doi_list)
         
-        for i, doi in enumerate(doi_list):
+        all_citing_articles = {}
+        for doi in doi_list:
             citing_dois = []
             data = openalex_data.get(doi, {})
             
@@ -825,13 +805,8 @@ class FullCitationAnalyzer:
                         pass
             
             all_citing_articles[doi] = citing_dois
-            
-            if progress_bar and total_articles > 0:
-                progress_bar.progress((i + 1) / total_articles)
         
-        if status_text:
-            status_text.text("✅ Цитирующие статьи найдены!")
-            
+        print(f"✅ Цитирующие статьи найдены для {len(doi_list)} статей")
         return all_citing_articles
 
     def analyze_references_comprehensive(self, doi_list: List[str]) -> pd.DataFrame:
@@ -844,12 +819,12 @@ class FullCitationAnalyzer:
         
         # Шаг 1: Получаем данные исходных статей
         main_status.text("📊 Шаг 1/4: Получение данных исходных статей...")
-        source_articles_data = self.get_article_data_batch(doi_list, st.empty())
+        source_articles_data = self.get_article_data_batch(doi_list)
         main_progress.progress(0.25)
         
         # Шаг 2: Собираем все ссылки
         main_status.text("📊 Шаг 2/4: Сбор ссылок на статьи...")
-        all_references = self.get_references_batch(doi_list, st.empty())
+        all_references = self.get_references_batch(doi_list)
         main_progress.progress(0.5)
         
         # Шаг 3: Собираем все DOI ссылок
@@ -864,7 +839,7 @@ class FullCitationAnalyzer:
         # Шаг 4: Получаем данные всех ссылок
         main_status.text("📊 Шаг 4/4: Получение данных ссылок...")
         if all_reference_dois:
-            reference_articles_data = self.get_article_data_batch(list(all_reference_dois), st.empty())
+            reference_articles_data = self.get_article_data_batch(list(all_reference_dois))
         else:
             reference_articles_data = {}
         
@@ -906,12 +881,12 @@ class FullCitationAnalyzer:
         
         # Шаг 1: Получаем данные исходных статей
         main_status.text("📊 Шаг 1/4: Получение данных исходных статей...")
-        source_articles_data = self.get_article_data_batch(doi_list, st.empty())
+        source_articles_data = self.get_article_data_batch(doi_list)
         main_progress.progress(0.25)
         
         # Шаг 2: Собираем все цитирующие статьи
         main_status.text("📊 Шаг 2/4: Поиск цитирующих статей...")
-        all_citing_articles = self.get_citing_articles_batch(doi_list, st.empty())
+        all_citing_articles = self.get_citing_articles_batch(doi_list)
         main_progress.progress(0.5)
         
         # Шаг 3: Собираем все DOI цитирующих статей
@@ -923,7 +898,7 @@ class FullCitationAnalyzer:
         # Шаг 4: Получаем данные всех цитирующих статей
         main_status.text("📊 Шаг 4/4: Получение данных цитирующих статей...")
         if all_citing_dois:
-            citing_articles_data = self.get_article_data_batch(list(all_citing_dois), st.empty())
+            citing_articles_data = self.get_article_data_batch(list(all_citing_dois))
         else:
             citing_articles_data = {}
         
@@ -1019,7 +994,7 @@ def main():
     st.markdown("🔬 Полнофункциональный анализ ссылок и цитирований научных статей")
     
     if not NLTK_AVAILABLE:
-        st.warning("⚠️ NLTK не доступен. Используется упрощенная обработка текста. Для полного функционала установите nltk в requirements.txt")
+        st.warning("⚠️ NLTK не доступен. Используется упрощенная обработка текста.")
     
     analyzer = FullCitationAnalyzer()
     
