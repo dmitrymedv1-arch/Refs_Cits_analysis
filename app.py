@@ -19,6 +19,9 @@ from ratelimit import limits, sleep_and_retry
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import logging
 from io import BytesIO
+import tempfile
+import base64
+from pathlib import Path
 
 # Настройки
 st.set_page_config(
@@ -26,6 +29,35 @@ st.set_page_config(
     page_icon="📚",
     layout="wide"
 )
+
+# Создаем временную директорию для файлов
+TEMP_DIR = tempfile.mkdtemp()
+os.makedirs(TEMP_DIR, exist_ok=True)
+
+def get_temp_file_path(filename: str) -> str:
+    """Возвращает полный путь к временному файлу"""
+    return os.path.join(TEMP_DIR, filename)
+
+def create_download_link(file_path: str, filename: str, link_text: str) -> str:
+    """Создает HTML ссылку для скачивания файла"""
+    with open(file_path, 'rb') as f:
+        data = f.read()
+    b64 = base64.b64encode(data).decode()
+    href = f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}">{link_text}</a>'
+    return href
+
+def cleanup_temp_files():
+    """Очищает временные файлы старше 1 часа"""
+    try:
+        current_time = time.time()
+        for filename in os.listdir(TEMP_DIR):
+            file_path = os.path.join(TEMP_DIR, filename)
+            if os.path.isfile(file_path):
+                file_time = os.path.getmtime(file_path)
+                if current_time - file_time > 3600:  # 1 час
+                    os.remove(file_path)
+    except Exception as e:
+        print(f"Ошибка при очистке временных файлов: {e}")
 
 # Инициализация NLTK
 def initialize_nltk():
@@ -1402,7 +1434,7 @@ class FullCitationAnalyzer:
             year_counts_total['percentage_total'] = round(year_counts_total['frequency_total'] / total_refs * 100, 2)
 
             years_unique = pd.to_numeric(unique_df['year'], errors='coerce')
-            years_unique = years_unique[years_unique.notna() & years_unique.between(1900, 2026)].astype(int)
+            years_unique = years_unique[years_unique.notna() & years_unique.between(1900, 2026)].astyname()
             year_counts_unique = years_unique.value_counts().reset_index()
             year_counts_unique.columns = ['year', 'frequency_unique']
             year_counts_unique['percentage_unique'] = round(year_counts_unique['frequency_unique'] / total_unique * 100, 2)
@@ -1534,7 +1566,7 @@ class FullCitationAnalyzer:
         total_refs = sum(len(refs) for refs in all_references.values())
         processed_refs = 0
         
-        for source_doi, references in all_references.items():
+        for source_doi, references in all_references.values():
             for ref in references:
                 ref_doi = ref.get('DOI')
                 title = ref.get('article-title', 'Unknown')
@@ -1775,11 +1807,11 @@ class FullCitationAnalyzer:
         
         return pd.DataFrame(all_data)
 
-    # ИСПРАВЛЕННЫЕ МЕТОДЫ ЭКСПОРТА В EXCEL
+    # ИСПРАВЛЕННЫЕ МЕТОДЫ ЭКСПОРТА В EXCEL С СОХРАНЕНИЕМ ВО ВРЕМЕННЫЕ ФАЙЛЫ
     def save_references_analysis_to_excel(self, references_df: pd.DataFrame, source_articles_df: pd.DataFrame,
                                         doi_list: List[str], total_references: int, unique_dois: int,
-                                        all_titles: List[str]) -> bytes:
-        """Сохраняет полный анализ ссылок в Excel и возвращает bytes"""
+                                        all_titles: List[str]) -> str:
+        """Сохраняет полный анализ ссылок в Excel и возвращает путь к файлу"""
         try:
             # Создаем workbook в памяти
             wb = Workbook()
@@ -1909,30 +1941,34 @@ Title word analysis helps identify key research topics and trends
                 except Exception as e:
                     pass
 
-            # Сохраняем в bytes
-            virtual_workbook = BytesIO()
-            wb.save(virtual_workbook)
-            virtual_workbook.seek(0)
+            # Сохраняем во временный файл
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"references_analysis_{timestamp}.xlsx"
+            file_path = get_temp_file_path(filename)
             
-            return virtual_workbook.getvalue()
+            wb.save(file_path)
+            
+            return file_path
 
         except Exception as e:
             self.logger.error(f"Error saving Excel: {e}")
-            # Возвращаем пустой файл в случае ошибки
+            # Создаем файл с ошибкой
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"error_references_analysis_{timestamp}.xlsx"
+            file_path = get_temp_file_path(filename)
+            
             wb = Workbook()
             ws = wb.active
             ws.title = "Error"
             ws.append(["Error creating Excel file"])
             ws.append([str(e)])
+            wb.save(file_path)
             
-            virtual_workbook = BytesIO()
-            wb.save(virtual_workbook)
-            virtual_workbook.seek(0)
-            return virtual_workbook.getvalue()
+            return file_path
 
     def save_citations_analysis_to_excel(self, citations_df: pd.DataFrame, citing_details_df: pd.DataFrame,
-                                       doi_list: List[str], citing_results: Dict, all_citing_titles: List[str]) -> bytes:
-        """Сохраняет полный анализ цитирований в Excel и возвращает bytes"""
+                                       doi_list: List[str], citing_results: Dict, all_citing_titles: List[str]) -> str:
+        """Сохраняет полный анализ цитирований в Excel и возвращает путь к файлу"""
         try:
             wb = Workbook()
             wb.remove(wb.active)
@@ -2058,30 +2094,37 @@ Title word analysis helps identify key research topics and trends in citing lite
                 except Exception as e:
                     pass
 
-            # Сохраняем в bytes
-            virtual_workbook = BytesIO()
-            wb.save(virtual_workbook)
-            virtual_workbook.seek(0)
+            # Сохраняем во временный файл
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"citations_analysis_{timestamp}.xlsx"
+            file_path = get_temp_file_path(filename)
             
-            return virtual_workbook.getvalue()
+            wb.save(file_path)
+            
+            return file_path
 
         except Exception as e:
             self.logger.error(f"Error saving citations Excel: {e}")
-            # Возвращаем пустой файл в случае ошибки
+            # Создаем файл с ошибкой
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"error_citations_analysis_{timestamp}.xlsx"
+            file_path = get_temp_file_path(filename)
+            
             wb = Workbook()
             ws = wb.active
             ws.title = "Error"
             ws.append(["Error creating Excel file"])
             ws.append([str(e)])
+            wb.save(file_path)
             
-            virtual_workbook = BytesIO()
-            wb.save(virtual_workbook)
-            virtual_workbook.seek(0)
-            return virtual_workbook.getvalue()
+            return file_path
 
 def main():
     st.title("📚 Refs/Cits Analysis - Full Professional Version")
     st.markdown("🔬 Полнофункциональный анализ ссылок и цитирований научных статей")
+    
+    # Очистка временных файлов при старте
+    cleanup_temp_files()
     
     if not NLTK_AVAILABLE:
         st.warning("⚠️ NLTK не доступен. Используется упрощенная обработка текста.")
@@ -2318,27 +2361,37 @@ def main():
                         with st.spinner("Создание Excel отчета..."):
                             source_articles_df = references_df[references_df['type'] == 'source']
                             all_titles = references_df['title'].tolist()
-                            excel_data = analyzer.save_references_analysis_to_excel(
+                            excel_file_path = analyzer.save_references_analysis_to_excel(
                                 references_df, source_articles_df, dois, 
                                 len(references_df[references_df['type'] == 'reference']),
                                 references_df['doi'].nunique(), all_titles
                             )
                             
-                            # Сохраняем данные Excel в session state
-                            st.session_state.excel_refs_data = excel_data
-                            st.session_state.excel_refs_filename = f"references_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                            # Сохраняем путь к файлу в session state
+                            st.session_state.excel_refs_path = excel_file_path
+                            st.session_state.excel_refs_filename = os.path.basename(excel_file_path)
                             
-                            st.success("✅ Excel отчет создан! Нажмите кнопку скачивания ниже.")
+                            st.success("✅ Excel отчет создан!")
                     
                     # Кнопка скачивания - отображается только после создания файла
-                    if 'excel_refs_data' in st.session_state:
-                        st.download_button(
-                            "📥 Скачать полный отчет (Excel)",
-                            st.session_state.excel_refs_data,
+                    if 'excel_refs_path' in st.session_state:
+                        # Создаем ссылку для скачивания
+                        download_link = create_download_link(
+                            st.session_state.excel_refs_path,
                             st.session_state.excel_refs_filename,
-                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key='download_excel_refs'
+                            "📥 Скачать полный отчет (Excel)"
                         )
+                        st.markdown(download_link, unsafe_allow_html=True)
+                        
+                        # Также показываем стандартную кнопку для надежности
+                        with open(st.session_state.excel_refs_path, 'rb') as f:
+                            st.download_button(
+                                "📥 Скачать отчет (альтернативный способ)",
+                                f,
+                                st.session_state.excel_refs_filename,
+                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key='download_excel_refs'
+                            )
                 else:
                     st.error("❌ Не удалось получить данные")
         else:
@@ -2506,25 +2559,35 @@ def main():
                     if st.button("📊 Создать полный отчет Excel", key="excel_cits"):
                         with st.spinner("Создание Excel отчета..."):
                             all_citing_titles = citations_df[citations_df['type'] == 'citation']['title'].tolist()
-                            excel_data = analyzer.save_citations_analysis_to_excel(
+                            excel_file_path = analyzer.save_citations_analysis_to_excel(
                                 citations_df, citing_details_df, dois, citing_results, all_citing_titles
                             )
                             
-                            # Сохраняем данные Excel в session state
-                            st.session_state.excel_cits_data = excel_data
-                            st.session_state.excel_cits_filename = f"citations_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                            # Сохраняем путь к файлу в session state
+                            st.session_state.excel_cits_path = excel_file_path
+                            st.session_state.excel_cits_filename = os.path.basename(excel_file_path)
                             
-                            st.success("✅ Excel отчет создан! Нажмите кнопку скачивания ниже.")
+                            st.success("✅ Excel отчет создан!")
                     
                     # Кнопка скачивания - отображается только после создания файла
-                    if 'excel_cits_data' in st.session_state:
-                        st.download_button(
-                            "📥 Скачать полный отчет (Excel)",
-                            st.session_state.excel_cits_data,
+                    if 'excel_cits_path' in st.session_state:
+                        # Создаем ссылку для скачивания
+                        download_link = create_download_link(
+                            st.session_state.excel_cits_path,
                             st.session_state.excel_cits_filename,
-                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key='download_excel_cits'
+                            "📥 Скачать полный отчет (Excel)"
                         )
+                        st.markdown(download_link, unsafe_allow_html=True)
+                        
+                        # Также показываем стандартную кнопку для надежности
+                        with open(st.session_state.excel_cits_path, 'rb') as f:
+                            st.download_button(
+                                "📥 Скачать отчет (альтернативный способ)",
+                                f,
+                                st.session_state.excel_cits_filename,
+                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key='download_excel_cits'
+                            )
                 else:
                     st.error("❌ Не удалось получить данные")
         else:
