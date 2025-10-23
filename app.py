@@ -1535,53 +1535,54 @@ class FullCitationAnalyzer:
             return pd.DataFrame()
 
     # Основные методы анализа с улучшенным прогрессом
-    def analyze_references_comprehensive(self, doi_list: List[str]) -> pd.DataFrame:
-        """Полный анализ ссылок с детальным прогрессом"""
+        def analyze_references_comprehensive(self, doi_list: List[str]) -> pd.DataFrame:
+            """Полный анализ ссылок с детальным прогрессом"""
         st.info(f"🔍 Начинаем анализ ссылок для {len(doi_list)} статей...")
-        
+    
         # Контейнеры для прогресса
         main_progress = st.progress(0)
         main_status = st.empty()
         step_progress = st.empty()
         step_status = st.empty()
-        
+    
         # Шаг 1: Получаем данные исходных статей
         main_status.text("📊 Шаг 1/5: Получение данных исходных статей...")
         step_status.text("Получение метаданных статей...")
         source_articles_data = self.get_article_data_batch(doi_list)
         main_progress.progress(0.2)
-        
+    
         # Шаг 2: Собираем все ссылки
         main_status.text("📊 Шаг 2/5: Сбор ссылок на статьи...")
         step_status.text("Сбор библиографии...")
         all_references = self.get_references_batch(doi_list)
         main_progress.progress(0.4)
-        
+    
         # Шаг 3: Собираем все DOI ссылок
         main_status.text("📊 Шаг 3/5: Подготовка данных ссылок...")
         step_status.text("Извлечение DOI из ссылок...")
         all_reference_dois = set()
         reference_titles = []
-        
+    
         total_refs = sum(len(refs) for refs in all_references.values())
         processed_refs = 0
-        
-        for source_doi, references in all_references.values():
+    
+        # ИСПРАВЛЕНИЕ: используем .items() вместо .values()
+        for source_doi, references in all_references.items():  # ← ИСПРАВЛЕНО ЗДЕСЬ
             for ref in references:
                 ref_doi = ref.get('DOI')
                 title = ref.get('article-title', 'Unknown')
                 reference_titles.append(title)
-                
+            
                 if ref_doi and self.validate_doi(ref_doi):
                     all_reference_dois.add(ref_doi)
                 processed_refs += 1
-                
+            
                 # Обновляем прогресс каждые 10 ссылок
                 if processed_refs % 10 == 0:
                     progress_pct = processed_refs / total_refs * 100
                     step_progress.progress(progress_pct / 100)
                     step_status.text(f"Обработано {processed_refs}/{total_refs} ссылок ({progress_pct:.1f}%)")
-        
+    
         main_progress.progress(0.6)
         
         # Шаг 4: Поиск DOI по заголовкам для ссылок без DOI
@@ -2595,3 +2596,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
