@@ -5,7 +5,6 @@ import time
 from typing import List, Dict, Any, Tuple, Set
 import re
 from collections import Counter
-import tempfile
 import os
 import concurrent.futures
 from functools import lru_cache
@@ -19,6 +18,7 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 from ratelimit import limits, sleep_and_retry
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import logging
+from io import BytesIO
 
 # Настройки
 st.set_page_config(
@@ -792,7 +792,7 @@ class FullCitationAnalyzer:
         # Год публикации - ИСПРАВЛЕННАЯ ЧАСТЬ
         year = 'Unknown'
         publication_year = None
-    
+        
         try:
             if openalex_data and openalex_data.get('publication_year'):
                 publication_year = openalex_data['publication_year']
@@ -1775,7 +1775,7 @@ class FullCitationAnalyzer:
         
         return pd.DataFrame(all_data)
 
-    # Экспорт в Excel с множеством вкладок
+    # ИСПРАВЛЕННЫЕ МЕТОДЫ ЭКСПОРТА В EXCEL
     def save_references_analysis_to_excel(self, references_df: pd.DataFrame, source_articles_df: pd.DataFrame,
                                         doi_list: List[str], total_references: int, unique_dois: int,
                                         all_titles: List[str]) -> bytes:
@@ -1783,10 +1783,7 @@ class FullCitationAnalyzer:
         try:
             # Создаем workbook в памяти
             wb = Workbook()
-            wb.remove(wb.active)
-
-            # Удаляем дефолтный лист
-            wb.remove(wb.active)
+            wb.remove(wb.active)  # Удаляем дефолтный лист
 
             # Получаем все данные для анализа
             unique_df = self.get_unique_references(references_df)
@@ -1912,30 +1909,22 @@ Title word analysis helps identify key research topics and trends
                 except Exception as e:
                     pass
 
-            wb.save(excel_path)
-            return excel_path
-
-        except Exception as e:
-            self.logger.error(f"Error saving Excel: {e}")
-            return ""
-
-            # Сохраняем в bytes вместо файла
-            from io import BytesIO
+            # Сохраняем в bytes
             virtual_workbook = BytesIO()
             wb.save(virtual_workbook)
             virtual_workbook.seek(0)
-        
-            return virtual_workbook.getvalue()  # Возвращаем bytes
+            
+            return virtual_workbook.getvalue()
 
         except Exception as e:
-            # Создаем простой Excel с ошибкой
+            self.logger.error(f"Error saving Excel: {e}")
+            # Возвращаем пустой файл в случае ошибки
             wb = Workbook()
             ws = wb.active
             ws.title = "Error"
             ws.append(["Error creating Excel file"])
             ws.append([str(e)])
-        
-            from io import BytesIO
+            
             virtual_workbook = BytesIO()
             wb.save(virtual_workbook)
             virtual_workbook.seek(0)
@@ -2069,30 +2058,22 @@ Title word analysis helps identify key research topics and trends in citing lite
                 except Exception as e:
                     pass
 
-            wb.save(excel_path)
-            return excel_path
-
-        except Exception as e:
-            self.logger.error(f"Error saving citations Excel: {e}")
-            return ""
-
-            # Сохраняем в bytes вместо файла
-            from io import BytesIO
+            # Сохраняем в bytes
             virtual_workbook = BytesIO()
             wb.save(virtual_workbook)
             virtual_workbook.seek(0)
-        
-            return virtual_workbook.getvalue()  # Возвращаем bytes
+            
+            return virtual_workbook.getvalue()
 
         except Exception as e:
-            # Создаем простой Excel с ошибкой
+            self.logger.error(f"Error saving citations Excel: {e}")
+            # Возвращаем пустой файл в случае ошибки
             wb = Workbook()
             ws = wb.active
             ws.title = "Error"
             ws.append(["Error creating Excel file"])
             ws.append([str(e)])
-        
-            from io import BytesIO
+            
             virtual_workbook = BytesIO()
             wb.save(virtual_workbook)
             virtual_workbook.seek(0)
@@ -2326,10 +2307,10 @@ def main():
                         if not duplicates_df.empty:
                             st.dataframe(duplicates_df.head(20), use_container_width=True)
                     
-                    # Экспорт в Excel
+                    # Экспорт в Excel - ИСПРАВЛЕННАЯ ЧАСТЬ
                     st.subheader("💾 Экспорт данных")
                     
-                    if st.button("📊 Создать полный отчет Excel"):
+                    if st.button("📊 Создать полный отчет Excel", key="excel_refs"):
                         with st.spinner("Создание Excel отчета..."):
                             source_articles_df = references_df[references_df['type'] == 'source']
                             all_titles = references_df['title'].tolist()
@@ -2338,7 +2319,7 @@ def main():
                                 len(references_df[references_df['type'] == 'reference']),
                                 references_df['doi'].nunique(), all_titles
                             )
-
+                            
                             st.download_button(
                                 "📥 Скачать полный отчет (Excel)",
                                 excel_data,
@@ -2346,10 +2327,7 @@ def main():
                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                 key='download_excel_refs'
                             )
-                            
-                            st.success("✅ Excel отчет создан!")
-                        else:
-                            st.error("❌ Ошибка при создании Excel отчета")
+                            st.success("✅ Excel отчет создан! Нажмите кнопку скачивания выше.")
                 else:
                     st.error("❌ Не удалось получить данные")
         else:
@@ -2507,7 +2485,7 @@ def main():
                         if not citing_duplicates_df.empty:
                             st.dataframe(citing_duplicates_df.head(20), use_container_width=True)
                     
-                    # Экспорт в Excel
+                    # Экспорт в Excel - ИСПРАВЛЕННАЯ ЧАСТЬ
                     st.subheader("💾 Экспорт данных")
                     
                     if st.button("📊 Создать полный отчет Excel", key="excel_cits"):
@@ -2516,7 +2494,7 @@ def main():
                             excel_data = analyzer.save_citations_analysis_to_excel(
                                 citations_df, citing_details_df, dois, citing_results, all_citing_titles
                             )
-
+                            
                             st.download_button(
                                 "📥 Скачать полный отчет (Excel)",
                                 excel_data,
@@ -2524,9 +2502,7 @@ def main():
                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                 key='download_excel_cits'
                             )
-                                st.success("✅ Excel отчет создан!")
-                            else:
-                                st.error("❌ Ошибка при создании Excel отчета")
+                            st.success("✅ Excel отчет создан! Нажмите кнопку скачивания выше.")
                 else:
                     st.error("❌ Не удалось получить данные")
         else:
@@ -2534,9 +2510,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
