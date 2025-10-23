@@ -2003,6 +2003,7 @@ Title word analysis helps identify key research topics and trends
 
         except Exception as e:
             self.logger.error(f"Error saving Excel: {e}")
+            
             # Создаем файл с ошибкой
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f"error_references_analysis_{timestamp}.xlsx"
@@ -2015,6 +2016,28 @@ Title word analysis helps identify key research topics and trends
             ws.append([str(e)])
             wb.save(file_path)
             
+            return file_path
+
+            # Сохраняем во временный файл
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"references_analysis_{timestamp}.xlsx"
+            file_path = get_temp_file_path(filename)
+        
+            wb.save(file_path)
+        
+            # ОТЛАДОЧНЫЙ ВЫВОД
+            print(f"💾 Excel файл сохранен:")
+            print(f"   Путь: {file_path}")
+            print(f"   Файл существует: {os.path.exists(file_path)}")
+            if os.path.exists(file_path):
+                file_size = os.path.getsize(file_path)
+                print(f"   Размер: {file_size} байт")
+        
+            return file_path
+
+        except Exception as e:
+            # ... существующий код обработки ошибок ...
+            print(f"❌ Ошибка сохранения Excel: {e}")
             return file_path
 
     def save_citations_analysis_to_excel(self, citations_df: pd.DataFrame, citing_details_df: pd.DataFrame,
@@ -2681,5 +2704,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
