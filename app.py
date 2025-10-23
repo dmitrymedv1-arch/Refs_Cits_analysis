@@ -1778,12 +1778,12 @@ class FullCitationAnalyzer:
     # Экспорт в Excel с множеством вкладок
     def save_references_analysis_to_excel(self, references_df: pd.DataFrame, source_articles_df: pd.DataFrame,
                                         doi_list: List[str], total_references: int, unique_dois: int,
-                                        all_titles: List[str]) -> str:
-        """Сохраняет полный анализ ссылок в Excel"""
+                                        all_titles: List[str]) -> bytes:
+        """Сохраняет полный анализ ссылок в Excel и возвращает bytes"""
         try:
-            timestamp = int(time.time())
-            excel_path = os.path.join(tempfile.gettempdir(), f"references_analysis_results_{timestamp}.xlsx")
+            # Создаем workbook в памяти
             wb = Workbook()
+            wb.remove(wb.active)
 
             # Удаляем дефолтный лист
             wb.remove(wb.active)
@@ -1919,14 +1919,33 @@ Title word analysis helps identify key research topics and trends
             self.logger.error(f"Error saving Excel: {e}")
             return ""
 
-    def save_citations_analysis_to_excel(self, citations_df: pd.DataFrame, citing_details_df: pd.DataFrame,
-                                       doi_list: List[str], citing_results: Dict, all_citing_titles: List[str]) -> str:
-        """Сохраняет полный анализ цитирований в Excel"""
-        try:
-            timestamp = int(time.time())
-            excel_path = os.path.join(tempfile.gettempdir(), f"citations_analysis_results_{timestamp}.xlsx")
-            wb = Workbook()
+            # Сохраняем в bytes вместо файла
+            from io import BytesIO
+            virtual_workbook = BytesIO()
+            wb.save(virtual_workbook)
+            virtual_workbook.seek(0)
+        
+            return virtual_workbook.getvalue()  # Возвращаем bytes
 
+        except Exception as e:
+            # Создаем простой Excel с ошибкой
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Error"
+            ws.append(["Error creating Excel file"])
+            ws.append([str(e)])
+        
+            from io import BytesIO
+            virtual_workbook = BytesIO()
+            wb.save(virtual_workbook)
+            virtual_workbook.seek(0)
+            return virtual_workbook.getvalue()
+
+    def save_citations_analysis_to_excel(self, citations_df: pd.DataFrame, citing_details_df: pd.DataFrame,
+                                       doi_list: List[str], citing_results: Dict, all_citing_titles: List[str]) -> bytes:
+        """Сохраняет полный анализ цитирований в Excel и возвращает bytes"""
+        try:
+            wb = Workbook()
             wb.remove(wb.active)
 
             # Получаем все данные для анализа
@@ -2056,6 +2075,28 @@ Title word analysis helps identify key research topics and trends in citing lite
         except Exception as e:
             self.logger.error(f"Error saving citations Excel: {e}")
             return ""
+
+            # Сохраняем в bytes вместо файла
+            from io import BytesIO
+            virtual_workbook = BytesIO()
+            wb.save(virtual_workbook)
+            virtual_workbook.seek(0)
+        
+            return virtual_workbook.getvalue()  # Возвращаем bytes
+
+        except Exception as e:
+            # Создаем простой Excel с ошибкой
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Error"
+            ws.append(["Error creating Excel file"])
+            ws.append([str(e)])
+        
+            from io import BytesIO
+            virtual_workbook = BytesIO()
+            wb.save(virtual_workbook)
+            virtual_workbook.seek(0)
+            return virtual_workbook.getvalue()
 
 def main():
     st.title("📚 Refs/Cits Analysis - Full Professional Version")
@@ -2500,5 +2541,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
