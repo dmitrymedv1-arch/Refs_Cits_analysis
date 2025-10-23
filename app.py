@@ -11,15 +11,6 @@ import concurrent.futures
 from functools import lru_cache
 import json
 from datetime import datetime
-import nltk
-from nltk.corpus import stopwords
-from nltk.stem import PorterStemmer
-
-# Загрузка стоп-слов NLTK
-try:
-    nltk.data.find('corpora/stopwords')
-except LookupError:
-    nltk.download('stopwords')
 
 # Настройки
 st.set_page_config(
@@ -27,6 +18,24 @@ st.set_page_config(
     page_icon="📚",
     layout="wide"
 )
+
+# Попытка импорта NLTK с обработкой ошибок
+try:
+    import nltk
+    try:
+        nltk.data.find('corpora/stopwords')
+    except LookupError:
+        try:
+            nltk.download('stopwords', quiet=True)
+        except:
+            st.warning("NLTK stopwords не доступны. Используем базовые стоп-слова.")
+    
+    from nltk.corpus import stopwords
+    from nltk.stem import PorterStemmer
+    NLTK_AVAILABLE = True
+except ImportError:
+    NLTK_AVAILABLE = False
+    st.warning("NLTK не установлен. Используем упрощенную обработку текста.")
 
 class Config:
     REQUEST_TIMEOUT = 30
@@ -189,9 +198,33 @@ class FullCitationAnalyzer:
         self.fast_affiliation_processor = FastAffiliationProcessor()
         self.altmetric_processor = AltmetricProcessor()
         
-        # NLP компоненты
-        self.stop_words = set(stopwords.words('english'))
-        self.stemmer = PorterStemmer()
+        # NLP компоненты (с обработкой отсутствия NLTK)
+        if NLTK_AVAILABLE:
+            self.stop_words = set(stopwords.words('english'))
+            self.stemmer = PorterStemmer()
+        else:
+            # Базовые стоп-слова если NLTK недоступен
+            self.stop_words = {
+                'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you', "you're", "you've", 
+                "you'll", "you'd", 'your', 'yours', 'yourself', 'yourselves', 'he', 'him', 'his', 'himself', 
+                'she', "she's", 'her', 'hers', 'herself', 'it', "it's", 'its', 'itself', 'they', 'them', 
+                'their', 'theirs', 'themselves', 'what', 'which', 'who', 'whom', 'this', 'that', "that'll", 
+                'these', 'those', 'am', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 
+                'had', 'having', 'do', 'does', 'did', 'doing', 'a', 'an', 'the', 'and', 'but', 'if', 'or', 
+                'because', 'as', 'until', 'while', 'of', 'at', 'by', 'for', 'with', 'about', 'against', 
+                'between', 'into', 'through', 'during', 'before', 'after', 'above', 'below', 'to', 'from', 
+                'up', 'down', 'in', 'out', 'on', 'off', 'over', 'under', 'again', 'further', 'then', 'once', 
+                'here', 'there', 'when', 'where', 'why', 'how', 'all', 'any', 'both', 'each', 'few', 'more', 
+                'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 
+                'too', 'very', 's', 't', 'can', 'will', 'just', 'don', "don't", 'should', "should've", 
+                'now', 'd', 'll', 'm', 'o', 're', 've', 'y', 'ain', 'aren', "aren't", 'couldn', "couldn't", 
+                'didn', "didn't", 'doesn', "doesn't", 'hadn', "hadn't", 'hasn', "hasn't", 'haven', "haven't", 
+                'isn', "isn't", 'ma', 'mightn', "mightn't", 'mustn', "mustn't", 'needn', "needn't", 'shan', 
+                "shan't", 'shouldn', "shouldn't", 'wasn', "wasn't", 'weren', "weren't", 'won', "won't", 
+                'wouldn', "wouldn't"
+            }
+            self.stemmer = None
+        
         self.scientific_stopwords = {
             'using', 'based', 'study', 'studies', 'research', 'analysis',
             'effect', 'effects', 'properties', 'property', 'development',
@@ -205,7 +238,11 @@ class FullCitationAnalyzer:
             'interfaces', 'nanoparticle', 'nanoparticles', 'nanostructure',
             'nanostructures', 'composite', 'composites', 'coating', 'coatings'
         }
-        self.scientific_stopwords_stemmed = {self.stemmer.stem(word) for word in self.scientific_stopwords}
+        
+        if NLTK_AVAILABLE and self.stemmer:
+            self.scientific_stopwords_stemmed = {self.stemmer.stem(word) for word in self.scientific_stopwords}
+        else:
+            self.scientific_stopwords_stemmed = self.scientific_stopwords
 
     def validate_doi(self, doi: str) -> bool:
         """Проверяет валидность DOI"""
@@ -309,7 +346,7 @@ class FullCitationAnalyzer:
                 except Exception as e:
                     results[doi] = {}
                 
-                if progress_bar:
+                if progress_bar and total_dois > 0:
                     progress_bar.progress((i + 1) / total_dois)
                 
                 time.sleep(Config.DELAY_BETWEEN_REQUESTS)
@@ -421,7 +458,7 @@ class FullCitationAnalyzer:
                             self._openalex_cache[clean_doi] = work
                             results[clean_doi] = work
                 
-                if progress_bar:
+                if progress_bar and total_dois > 0:
                     progress_bar.progress(min((i + batch_size) / total_dois, 1.0))
                     
             except Exception as e:
@@ -449,7 +486,7 @@ class FullCitationAnalyzer:
                     except Exception:
                         results[doi] = {}
                     
-                    if progress_bar:
+                    if progress_bar and len(missing_dois) > 0:
                         progress_bar.progress((len(dois) - len(missing_dois) + i + 1) / total_dois)
         
         return results
@@ -727,7 +764,7 @@ class FullCitationAnalyzer:
             references = data.get('reference', [])
             all_references[doi] = references
             
-            if progress_bar:
+            if progress_bar and total_articles > 0:
                 progress_bar.progress((i + 1) / total_articles)
         
         if status_text:
@@ -789,7 +826,7 @@ class FullCitationAnalyzer:
             
             all_citing_articles[doi] = citing_dois
             
-            if progress_bar:
+            if progress_bar and total_articles > 0:
                 progress_bar.progress((i + 1) / total_articles)
         
         if status_text:
@@ -980,6 +1017,9 @@ class FullCitationAnalyzer:
 def main():
     st.title("📚 Refs/Cits Analysis - Full Version")
     st.markdown("🔬 Полнофункциональный анализ ссылок и цитирований научных статей")
+    
+    if not NLTK_AVAILABLE:
+        st.warning("⚠️ NLTK не доступен. Используется упрощенная обработка текста. Для полного функционала установите nltk в requirements.txt")
     
     analyzer = FullCitationAnalyzer()
     
