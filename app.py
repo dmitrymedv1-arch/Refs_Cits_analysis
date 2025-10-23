@@ -2182,6 +2182,10 @@ def main():
                 if not references_df.empty:
                     st.success("✅ Анализ завершен!")
                     
+                    # Сохраняем результаты в session state
+                    st.session_state.references_df = references_df
+                    st.session_state.references_analysis_complete = True
+                    
                     # Основная статистика
                     st.subheader("📊 Общая статистика")
                     col1, col2, col3, col4 = st.columns(4)
@@ -2320,14 +2324,21 @@ def main():
                                 references_df['doi'].nunique(), all_titles
                             )
                             
-                            st.download_button(
-                                "📥 Скачать полный отчет (Excel)",
-                                excel_data,
-                                f"references_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                key='download_excel_refs'
-                            )
-                            st.success("✅ Excel отчет создан! Нажмите кнопку скачивания выше.")
+                            # Сохраняем данные Excel в session state
+                            st.session_state.excel_refs_data = excel_data
+                            st.session_state.excel_refs_filename = f"references_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                            
+                            st.success("✅ Excel отчет создан! Нажмите кнопку скачивания ниже.")
+                    
+                    # Кнопка скачивания - отображается только после создания файла
+                    if 'excel_refs_data' in st.session_state:
+                        st.download_button(
+                            "📥 Скачать полный отчет (Excel)",
+                            st.session_state.excel_refs_data,
+                            st.session_state.excel_refs_filename,
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key='download_excel_refs'
+                        )
                 else:
                     st.error("❌ Не удалось получить данные")
         else:
@@ -2356,6 +2367,10 @@ def main():
                 
                 if not citations_df.empty:
                     st.success("✅ Анализ завершен!")
+                    
+                    # Сохраняем результаты в session state
+                    st.session_state.citations_df = citations_df
+                    st.session_state.citations_analysis_complete = True
                     
                     # Основная статистика
                     st.subheader("📊 Общая статистика")
@@ -2495,14 +2510,21 @@ def main():
                                 citations_df, citing_details_df, dois, citing_results, all_citing_titles
                             )
                             
-                            st.download_button(
-                                "📥 Скачать полный отчет (Excel)",
-                                excel_data,
-                                f"citations_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                key='download_excel_cits'
-                            )
-                            st.success("✅ Excel отчет создан! Нажмите кнопку скачивания выше.")
+                            # Сохраняем данные Excel в session state
+                            st.session_state.excel_cits_data = excel_data
+                            st.session_state.excel_cits_filename = f"citations_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                            
+                            st.success("✅ Excel отчет создан! Нажмите кнопку скачивания ниже.")
+                    
+                    # Кнопка скачивания - отображается только после создания файла
+                    if 'excel_cits_data' in st.session_state:
+                        st.download_button(
+                            "📥 Скачать полный отчет (Excel)",
+                            st.session_state.excel_cits_data,
+                            st.session_state.excel_cits_filename,
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key='download_excel_cits'
+                        )
                 else:
                     st.error("❌ Не удалось получить данные")
         else:
