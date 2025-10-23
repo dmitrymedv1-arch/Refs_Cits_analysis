@@ -789,15 +789,27 @@ class FullCitationAnalyzer:
             if title_list:
                 title = title_list[0]
 
-        # Год публикации
+        # Год публикации - ИСПРАВЛЕННАЯ ЧАСТЬ
         year = 'Unknown'
         publication_year = None
-        if openalex_data and openalex_data.get('publication_year'):
-            publication_year = openalex_data['publication_year']
-            year = str(publication_year)
-        elif crossref_data.get('issued', {}).get('date-parts', [[]])[0]:
-            year = str(crossref_data['issued']['date-parts'][0][0])
-            publication_year = int(year)
+    
+        try:
+            if openalex_data and openalex_data.get('publication_year'):
+                publication_year = openalex_data['publication_year']
+                year = str(publication_year)
+            elif crossref_data.get('issued', {}).get('date-parts', [[]])[0]:
+                year_str = str(crossref_data['issued']['date-parts'][0][0])
+                # Безопасное преобразование года
+                if year_str.isdigit() and len(year_str) == 4:
+                    publication_year = int(year_str)
+                    year = year_str
+                else:
+                    year = year_str
+                    publication_year = None
+        except (ValueError, TypeError, IndexError, KeyError) as e:
+            self.logger.debug(f"Error parsing year for {doi}: {e}")
+            year = 'Unknown'
+            publication_year = None
 
         # Авторы
         authors = []
@@ -937,7 +949,11 @@ class FullCitationAnalyzer:
             if year_match:
                 year = int(year_match.group())
             else:
-                year = int(year_str)
+                # Пытаемся извлечь год любым способом
+                try:
+                    year = int(year_str)
+                except ValueError:
+                    return 1
 
             if 1900 < year <= current_year:
                 return max(1, current_year - year)
@@ -950,7 +966,11 @@ class FullCitationAnalyzer:
         """Безопасный расчет ежегодной цитируемости"""
         try:
             if not isinstance(citation_count, (int, float)) or citation_count == 0:
-                return 0.0
+            return 0.0
+
+            # Если год публикации None, используем 1 год для расчета
+            if publication_year is None:
+                return float(citation_count)
 
             years = self._calculate_years_since_publication(publication_year, current_year)
             if years is None or not isinstance(years, (int, float)) or years <= 0:
@@ -2480,3 +2500,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
