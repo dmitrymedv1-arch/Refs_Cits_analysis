@@ -45,9 +45,19 @@ def create_download_link(file_path: str, filename: str, link_text: str) -> str:
             data = f.read()
         b64 = base64.b64encode(data).decode()
         href = f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-align: center; text-decoration: none; display: inline-block; border-radius: 5px; font-weight: bold;">{link_text}</a>'
+        
+        # ОТЛАДОЧНЫЙ ВЫВОД В КОНСОЛЬ
+        print(f"🔗 Создана HTML ссылка для скачивания:")
+        print(f"   Файл: {filename}")
+        print(f"   Путь: {file_path}")
+        print(f"   Размер файла: {len(data)} байт")
+        print(f"   HTML ссылка (первые 200 символов): {href[:200]}...")
+        
         return href
     except Exception as e:
-        return f"<p>Ошибка создания ссылки: {str(e)}</p>"
+        error_msg = f"Ошибка создания ссылки: {str(e)}"
+        print(f"❌ {error_msg}")
+        return f"<p>{error_msg}</p>"
 
 def cleanup_temp_files():
     """Очищает временные файлы старше 1 часа"""
@@ -2634,3 +2644,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
