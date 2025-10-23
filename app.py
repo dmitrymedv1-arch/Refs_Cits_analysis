@@ -2174,6 +2174,43 @@ def main():
     st.title("📚 Refs/Cits Analysis - Full Professional Version")
     st.markdown("🔬 Полнофункциональный анализ ссылок и цитирований научных статей")
     
+    # В разделе экспорта ссылок (после создания файла)
+    if 'excel_refs_path' in st.session_state:
+        # Создаем ссылку для скачивания
+        download_link = create_download_link(
+            st.session_state.excel_refs_path,
+            st.session_state.excel_refs_filename,
+            "📥 Скачать полный отчет (Excel)"
+        )
+    
+        # ОТЛАДОЧНЫЙ ВЫВОД
+        print(f"📊 Ссылка для скачивания отчета ссылок создана:")
+        print(f"   Путь к файлу: {st.session_state.excel_refs_path}")
+        print(f"   Имя файла: {st.session_state.excel_refs_filename}")
+        print(f"   Файл существует: {os.path.exists(st.session_state.excel_refs_path)}")
+    
+        if os.path.exists(st.session_state.excel_refs_path):
+            file_size = os.path.getsize(st.session_state.excel_refs_path)
+            print(f"   Размер файла: {file_size} байт")
+        else:
+            print("   ⚠️ Файл не существует!")
+    
+        st.markdown(download_link, unsafe_allow_html=True)
+    
+        # Также показываем стандартную кнопку для надежности
+        try:
+            with open(st.session_state.excel_refs_path, 'rb') as f:
+                st.download_button(
+                    "📥 Скачать отчет (альтернативный способ)",
+                    f,
+                    st.session_state.excel_refs_filename,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key='download_excel_refs'
+                )
+            print("✅ Стандартная кнопка скачивания создана")
+        except Exception as e:
+            print(f"❌ Ошибка создания стандартной кнопки: {e}")
+    
     # Очистка временных файлов при старте
     cleanup_temp_files()
     
@@ -2644,4 +2681,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
