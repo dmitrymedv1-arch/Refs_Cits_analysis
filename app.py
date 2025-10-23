@@ -2333,23 +2333,19 @@ def main():
                         with st.spinner("Создание Excel отчета..."):
                             source_articles_df = references_df[references_df['type'] == 'source']
                             all_titles = references_df['title'].tolist()
-                            excel_path = analyzer.save_references_analysis_to_excel(
+                            excel_data = analyzer.save_references_analysis_to_excel(
                                 references_df, source_articles_df, dois, 
                                 len(references_df[references_df['type'] == 'reference']),
                                 references_df['doi'].nunique(), all_titles
                             )
-                            
-                            if excel_path and os.path.exists(excel_path):
-                                with open(excel_path, "rb") as f:
-                                    excel_data = f.read()
-                                
-                                st.download_button(
-                                    "📥 Скачать полный отчет (Excel)",
-                                    excel_data,
-                                    f"references_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    key='download_excel_refs'
-                                )
+
+                            st.download_button(
+                                "📥 Скачать полный отчет (Excel)",
+                                excel_data,
+                                f"references_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key='download_excel_refs'
+                            )
                                 st.success("✅ Excel отчет создан!")
                             else:
                                 st.error("❌ Ошибка при создании Excel отчета")
@@ -2516,21 +2512,17 @@ def main():
                     if st.button("📊 Создать полный отчет Excel", key="excel_cits"):
                         with st.spinner("Создание Excel отчета..."):
                             all_citing_titles = citations_df[citations_df['type'] == 'citation']['title'].tolist()
-                            excel_path = analyzer.save_citations_analysis_to_excel(
+                            excel_data = analyzer.save_citations_analysis_to_excel(
                                 citations_df, citing_details_df, dois, citing_results, all_citing_titles
                             )
-                            
-                            if excel_path and os.path.exists(excel_path):
-                                with open(excel_path, "rb") as f:
-                                    excel_data = f.read()
-                                
-                                st.download_button(
-                                    "📥 Скачать полный отчет (Excel)",
-                                    excel_data,
-                                    f"citations_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    key='download_excel_cits'
-                                )
+
+                            st.download_button(
+                                "📥 Скачать полный отчет (Excel)",
+                                excel_data,
+                                f"citations_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key='download_excel_cits'
+                            )
                                 st.success("✅ Excel отчет создан!")
                             else:
                                 st.error("❌ Ошибка при создании Excel отчета")
@@ -2541,6 +2533,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
