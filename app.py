@@ -893,6 +893,7 @@ class CitationAnalyzer:
             crossref_data = self.get_crossref_data(doi)
             openalex_data = self.get_openalex_data(doi)
             altmetric_data = self.altmetric_processor.get_altmetric_metrics(doi)
+            print(f"DEBUG: DOI {doi} - Altmetric data: {altmetric_data}")
 
             title = 'Unknown'
             if openalex_data and openalex_data.get('title'):
@@ -975,6 +976,7 @@ class CitationAnalyzer:
                 'unique_accounts': altmetric_data['cited_by_accounts_count']
             }
         except Exception as e:
+            print(f"DEBUG: Error for DOI {doi}: {e}")
             return {
                 'doi': doi,
                 'title': 'Error',
@@ -3432,4 +3434,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
