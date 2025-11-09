@@ -744,7 +744,7 @@ class CitationAnalyzer:
             return {'publication_year': 'Unknown', 'extracted_affiliations': [], 'extracted_countries': []}
 
     def extract_affiliations_from_crossref(self, crossref_data: Dict) -> tuple[List[str], List[str]]:
-        """Извлекает аффилиации и страны из данных Crossref"""
+        """Extracts affiliations and countries from Crossref data using original names"""
         affiliations = set()
         countries = set()
 
@@ -753,37 +753,33 @@ class CitationAnalyzer:
                 for author in crossref_data['author']:
                     if 'affiliation' in author:
                         for affil in author['affiliation']:
-                            # Извлекаем основную организацию
                             if 'name' in affil:
                                 affiliation_name = affil['name'].strip()
                                 if affiliation_name and affiliation_name not in ['', 'None']:
-                                    # Нормализуем аффилиацию
-                                    main_org = self.fast_affiliation_processor.extract_main_organization_fast(affiliation_name)
-                                    if main_org and main_org != "Unknown":
-                                        affiliations.add(main_org)
+                                    # Use original affiliation name without extraction
+                                    affiliations.add(affiliation_name)
 
-                            # Извлекаем страну
                             country = self.extract_country_from_affiliation(affil)
                             if country:
                                 countries.add(country)
 
-            # Обрабатываем институциональные данные
+            # Also check other fields for affiliations
             for field in ['institution', 'organization', 'department']:
                 if field in crossref_data:
                     if isinstance(crossref_data[field], list):
                         for item in crossref_data[field]:
                             if isinstance(item, dict) and 'name' in item:
-                                main_org = self.fast_affiliation_processor.extract_main_organization_fast(item['name'].strip())
-                                if main_org and main_org != "Unknown":
-                                    affiliations.add(main_org)
+                                affiliation_name = item['name'].strip()
+                                if affiliation_name:
+                                    affiliations.add(affiliation_name)
                             elif isinstance(item, str):
-                                main_org = self.fast_affiliation_processor.extract_main_organization_fast(item.strip())
-                                if main_org and main_org != "Unknown":
-                                    affiliations.add(main_org)
+                                affiliation_name = item.strip()
+                                if affiliation_name:
+                                    affiliations.add(affiliation_name)
                     elif isinstance(crossref_data[field], str):
-                        main_org = self.fast_affiliation_processor.extract_main_organization_fast(crossref_data[field].strip())
-                        if main_org and main_org != "Unknown":
-                            affiliations.add(main_org)
+                        affiliation_name = crossref_data[field].strip()
+                        if affiliation_name:
+                            affiliations.add(affiliation_name)
 
         except Exception as e:
             self.logger.debug(f"Error extracting affiliations from Crossref: {e}")
@@ -1005,28 +1001,21 @@ class CitationAnalyzer:
             }
 
     def get_enhanced_affiliations_and_countries(self, openalex_data: Dict, crossref_data: Dict) -> tuple[List[str], str]:
-        """Улучшенная обработка аффилиаций с группировкой"""
+        """Enhanced affiliation processing with improved logic"""
         try:
-            # Получаем аффилиации из обоих источников
             openalex_affiliations, openalex_countries = self.get_affiliations_and_countries_from_openalex_data(openalex_data)
             crossref_affiliations, crossref_countries = self.get_affiliations_and_countries_from_crossref_data(crossref_data)
 
-            # Объединяем аффилиации
+            # Use original affiliations without extraction for better accuracy
             all_affiliations = []
             if openalex_affiliations and openalex_affiliations != ['Unknown']:
                 all_affiliations.extend(openalex_affiliations)
             if crossref_affiliations:
                 all_affiliations.extend(crossref_affiliations)
 
-            # Обрабатываем аффилиации через быстрый процессор
-            if all_affiliations:
-                affiliation_frequencies, grouped_organizations = self.fast_affiliation_processor.process_affiliations_list_fast(all_affiliations)
-                # Используем представителей групп как финальные аффилиации
-                final_affiliations = list(affiliation_frequencies.keys())
-            else:
-                final_affiliations = ['Unknown']
+            # For display, use original affiliation names
+            final_affiliations = list(set(all_affiliations)) if all_affiliations else ['Unknown']
 
-            # Объединяем страны
             all_countries = set()
             if openalex_countries and openalex_countries != 'Unknown':
                 countries_list = openalex_countries.split(';')
@@ -1043,31 +1032,43 @@ class CitationAnalyzer:
             return ['Unknown'], 'Unknown'
 
     def get_affiliations_and_countries_from_openalex_data(self, openalex_data: Dict) -> tuple[List[str], str]:
-        """Извлекает аффилиации и страны из данных OpenAlex"""
+        """Extracts affiliations and countries from OpenAlex data using improved logic"""
+        affiliations = set()
+        countries = set()
+        authors_list = []
+    
+        if not openalex_data:
+            return ['Unknown'], 'Unknown'
+    
+        # Check for 'authorships' key
+        if 'authorships' not in openalex_data:
+            return ['Unknown'], 'Unknown'
+    
         try:
-            if not openalex_data:
-                return ['Unknown'], 'Unknown'
-
-            affiliations = set()
-            countries = set()
-
-            for authorship in openalex_data.get('authorships', []):
-                for institution in authorship.get('institutions', []):
-                    display_name = institution.get('display_name', '')
-                    country_code = institution.get('country_code', '')
-
-                    if display_name:
-                        # Нормализуем название через наш процессор
-                        main_org = self.fast_affiliation_processor.extract_main_organization_fast(display_name)
-                        if main_org and main_org != "Unknown":
-                            affiliations.add(main_org)
-
-                    if country_code:
-                        countries.add(country_code.upper())
-
-            return list(affiliations) or ['Unknown'], ';'.join(sorted(countries)) if countries else 'Unknown'
-        except Exception as e:
-            self.logger.debug(f"Error extracting from OpenAlex: {e}")
+            for auth in openalex_data['authorships']:
+                author_name = auth.get('author', {}).get('display_name', 'Unknown')
+                authors_list.append(author_name)
+            
+                # Check for 'institutions' key
+                if 'institutions' in auth:
+                    for inst in auth.get('institutions', []):
+                        inst_name = inst.get('display_name')
+                        country_code = inst.get('country_code')
+                    
+                        if inst_name:
+                            # Use the full institution name without extraction
+                            affiliations.add(inst_name)
+                        if country_code:
+                            countries.add(country_code.upper())
+                        
+            # Convert to lists and format
+            affiliations_list = list(affiliations) if affiliations else ['Unknown']
+            countries_str = ';'.join(sorted(countries)) if countries else 'Unknown'
+        
+            return affiliations_list, countries_str
+        
+        except (KeyError, TypeError, AttributeError) as e:
+            self.logger.debug(f"Warning in extract_affiliations_and_countries: {e}")
             return ['Unknown'], 'Unknown'
 
     def get_affiliations_and_countries_from_crossref_data(self, crossref_data: Dict) -> tuple[List[str], List[str]]:
@@ -3431,3 +3432,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
