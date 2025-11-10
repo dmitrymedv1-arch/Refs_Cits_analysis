@@ -1149,140 +1149,58 @@ class CitationAnalyzer:
                     'citing_doi': citing_doi
                 })
 
-        # Cache unique citing article data - ИСПОЛЬЗУЕМ ПРАВИЛЬНЫЙ ПОДХОД
-        all_citing_dois = set(conn['citing_doi'] for conn in all_citing_connections)
-    
         progress_bar = st.progress(0)
         status_text = st.empty()
     
-        # ОБРАБАТЫВАЕМ КАЖДУЮ ЦИТИРУЮЩУЮ СТАТЬЮ ОТДЕЛЬНО
-        for i, citing_doi in enumerate(all_citing_dois):
-            try:
-                status_text.text(f"Processing citing article {i+1}/{len(all_citing_dois)}: {citing_doi}")
-            
-                # КРИТИЧЕСКИ ВАЖНО: получаем полные данные для каждой цитирующей статьи
-                article_data = self.get_combined_article_data(citing_doi)
-            
-                # Сохраняем в отдельный кэш для цитирующих статей
-                self.unique_citation_data_cache[citing_doi] = article_data
-                all_citing_titles.append(article_data['title'])
-                time.sleep(Config.DELAY_BETWEEN_REQUESTS)
-            
-                # Update progress
-                progress_bar.progress((i + 1) / len(all_citing_dois))
-            
-            except Exception as e:
-                # ПРИ ОШИБКЕ: пытаемся получить хотя бы базовые данные с реальными альтметриками
-                st.warning(f"Error processing citing article {citing_doi}: {str(e)[:100]}...")
-                try:
-                    # Получаем альтметрики ОТДЕЛЬНО
-                    altmetric_data = self.altmetric_processor.get_altmetric_metrics(citing_doi)
-                
-                    # Создаем базовый объект с реальными альтметриками
-                    article_data = {
-                        'doi': citing_doi,
-                        'title': 'Unknown',
-                        'authors': 'Unknown', 
-                        'authors_with_initials': 'Unknown',
-                        'author_count': 0,
-                        'year': 'Unknown',
-                        'journal_full_name': 'Unknown',
-                        'journal_abbreviation': 'Unknown',
-                        'publisher': 'Unknown',
-                        'citation_count_crossref': 0,
-                        'citation_count_openalex': 0,
-                        'affiliations': 'Unknown',
-                        'countries': 'Unknown',
-                        'years_since_publication': 1,
-                        'publication_year': None,
-                        # РЕАЛЬНЫЕ данные альтметрик
-                        'altmetric_score': altmetric_data['altmetric_score'],
-                        'number_of_mentions': altmetric_data['cited_by_posts_count'],
-                        'x_mentions': altmetric_data['cited_by_tweeters_count'],
-                        'rss_blogs': altmetric_data['cited_by_feeds_count'],
-                        'unique_accounts': altmetric_data['cited_by_accounts_count']
-                    }
-                    self.unique_citation_data_cache[citing_doi] = article_data
-                    all_citing_titles.append('Unknown')
-                except Exception as altmetric_error:
-                    # Крайний случай - только тогда нули
-                    article_data = {
-                        'doi': citing_doi,
-                        'title': 'Error', 
-                        'authors': 'Error', 
-                        'authors_with_initials': 'Error',
-                        'author_count': 0, 
-                        'year': 'Unknown', 
-                        'journal_full_name': 'Error',
-                        'journal_abbreviation': 'Error', 
-                        'publisher': 'Error',
-                        'citation_count_crossref': 0, 
-                        'citation_count_openalex': 0,
-                        'years_since_publication': 1, 
-                        'affiliations': 'Error', 
-                        'countries': 'Error',
-                        'publication_year': None,
-                        # Нули только если совсем не получилось
-                        'altmetric_score': 0, 
-                        'number_of_mentions': 0, 
-                        'x_mentions': 0,
-                        'rss_blogs': 0, 
-                        'unique_accounts': 0
-                    }
-                    self.unique_citation_data_cache[citing_doi] = article_data
-                    all_citing_titles.append('Error')
-
-        status_text.empty()
-        progress_bar.empty()
-
-        # Create citing_articles_df with ALL connections
-        for connection in all_citing_connections:
+        # ОБРАБАТЫВАЕМ КАЖДУЮ ЦИТИРУЮЩУЮ СТАТЬЮ НЕПОСРЕДСТВЕННО - БЕЗ КЭША
+        # как в References Analysis
+        for i, connection in enumerate(all_citing_connections):
             citing_doi = connection['citing_doi']
             source_doi = connection['source_doi']
-
-            # Берем данные из правильного кэша
-            article_data = self.unique_citation_data_cache.get(citing_doi, {})
         
-            citing_row = {
-                'source_doi': source_doi,
-                'position': 'N/A',
-                'doi': citing_doi,
-                'title': article_data.get('title', 'Unknown'),
-                'authors': article_data.get('authors', 'Unknown'),
-                'authors_with_initials': article_data.get('authors_with_initials', 'Unknown'),
-                'author_count': article_data.get('author_count', 0),
-                'year': article_data.get('year', 'Unknown'),
-                'journal_full_name': article_data.get('journal_full_name', 'Unknown'),
-                'journal_abbreviation': article_data.get('journal_abbreviation', 'Unknown'),
-                'publisher': article_data.get('publisher', 'Unknown'),
-                'citation_count_crossref': article_data.get('citation_count_crossref', 0),
-                'citation_count_openalex': article_data.get('citation_count_openalex', 0),
-                'annual_citation_rate_crossref': self.safe_calculate_annual_citation_rate(
-                    article_data.get('citation_count_crossref', 0), article_data.get('publication_year')
-                ),
-                'annual_citation_rate_openalex': self.safe_calculate_annual_citation_rate(
-                    article_data.get('citation_count_openalex', 0), article_data.get('publication_year')
-                ),
-                'years_since_publication': article_data.get('years_since_publication', 1),
-                'affiliations': article_data.get('affiliations', 'Unknown'),
-                'countries': article_data.get('countries', 'Unknown'),
-                # ВАЖНО: передаем реальные альтметрики из правильного источника
-                'altmetric_score': article_data.get('altmetric_score', 0),
-                'number_of_mentions': article_data.get('number_of_mentions', 0),
-                'x_mentions': article_data.get('x_mentions', 0),
-                'rss_blogs': article_data.get('rss_blogs', 0),
-                'unique_accounts': article_data.get('unique_accounts', 0),
-                'error': None
-            }
-            all_citing_articles_data.append(citing_row)
-
-        # Create DataFrame with all connections
-        citing_articles_df = pd.DataFrame(all_citing_articles_data) if all_citing_articles_data else pd.DataFrame()
-
-        # Create details table
-        for source_doi, data in citing_results.items():
-            for citing_doi in data['citing_dois']:
-                article_data = self.unique_citation_data_cache.get(citing_doi, {})
+            try:
+                status_text.text(f"Processing citing article {i+1}/{len(all_citing_connections)}: {citing_doi}")
+            
+                # КРИТИЧЕСКИ ВАЖНО: получаем полные данные НЕПОСРЕДСТВЕННО для каждой цитирующей статьи
+                # ТОЧНО ТАК ЖЕ, как в References Analysis
+                article_data = self.get_combined_article_data(citing_doi)
+                all_citing_titles.append(article_data['title'])
+            
+                # Сразу создаем строку для DataFrame - БЕЗ промежуточного кэша
+                citing_row = {
+                    'source_doi': source_doi,
+                    'position': 'N/A',
+                    'doi': citing_doi,
+                    'title': article_data.get('title', 'Unknown'),
+                    'authors': article_data.get('authors', 'Unknown'),
+                    'authors_with_initials': article_data.get('authors_with_initials', 'Unknown'),
+                    'author_count': article_data.get('author_count', 0),
+                    'year': article_data.get('year', 'Unknown'),
+                    'journal_full_name': article_data.get('journal_full_name', 'Unknown'),
+                    'journal_abbreviation': article_data.get('journal_abbreviation', 'Unknown'),
+                    'publisher': article_data.get('publisher', 'Unknown'),
+                    'citation_count_crossref': article_data.get('citation_count_crossref', 0),
+                    'citation_count_openalex': article_data.get('citation_count_openalex', 0),
+                    'annual_citation_rate_crossref': self.safe_calculate_annual_citation_rate(
+                        article_data.get('citation_count_crossref', 0), article_data.get('publication_year')
+                    ),
+                    'annual_citation_rate_openalex': self.safe_calculate_annual_citation_rate(
+                        article_data.get('citation_count_openalex', 0), article_data.get('publication_year')
+                    ),
+                    'years_since_publication': article_data.get('years_since_publication', 1),
+                    'affiliations': article_data.get('affiliations', 'Unknown'),
+                    'countries': article_data.get('countries', 'Unknown'),
+                    # РЕАЛЬНЫЕ данные альтметрик из get_combined_article_data
+                    'altmetric_score': article_data.get('altmetric_score', 0),
+                    'number_of_mentions': article_data.get('number_of_mentions', 0),
+                    'x_mentions': article_data.get('x_mentions', 0),
+                    'rss_blogs': article_data.get('rss_blogs', 0),
+                    'unique_accounts': article_data.get('unique_accounts', 0),
+                    'error': None
+                }
+                all_citing_articles_data.append(citing_row)
+            
+                # Также добавляем в details таблицу
                 citing_articles_details.append({
                     'source_doi': source_doi,
                     'citing_doi': citing_doi,
@@ -1294,7 +1212,71 @@ class CitationAnalyzer:
                     'altmetric_score': article_data.get('altmetric_score', 0),
                     'number_of_mentions': article_data.get('number_of_mentions', 0)
                 })
+            
+                time.sleep(Config.DELAY_BETWEEN_REQUESTS)
+            
+            except Exception as e:
+                # ПРИ ОШИБКЕ: создаем строку с ошибкой, но все равно пытаемся получить альтметрики
+                st.warning(f"Error processing citing article {citing_doi}: {str(e)[:100]}...")
+                try:
+                    # Пытаемся получить хотя бы альтметрики
+                    altmetric_data = self.altmetric_processor.get_altmetric_metrics(citing_doi)
+                except:
+                    altmetric_data = {
+                        'altmetric_score': 0, 'cited_by_posts_count': 0, 'cited_by_tweeters_count': 0,
+                        'cited_by_feeds_count': 0, 'cited_by_accounts_count': 0
+                    }
+            
+                # Создаем строку с ошибкой, но с реальными альтметриками если получилось
+                error_row = {
+                    'source_doi': source_doi,
+                    'position': 'N/A',
+                    'doi': citing_doi,
+                    'title': 'Error',
+                    'authors': 'Error',
+                    'authors_with_initials': 'Error',
+                    'author_count': 0,
+                    'year': 'Unknown',
+                    'journal_full_name': 'Error',
+                    'journal_abbreviation': 'Error',
+                    'publisher': 'Error',
+                    'citation_count_crossref': 0,
+                    'citation_count_openalex': 0,
+                    'annual_citation_rate_crossref': 0,
+                    'annual_citation_rate_openalex': 0,
+                    'years_since_publication': 1,
+                    'affiliations': 'Error',
+                    'countries': 'Error',
+                    'altmetric_score': altmetric_data['altmetric_score'],
+                    'number_of_mentions': altmetric_data['cited_by_posts_count'],
+                    'x_mentions': altmetric_data['cited_by_tweeters_count'],
+                    'rss_blogs': altmetric_data['cited_by_feeds_count'],
+                    'unique_accounts': altmetric_data['cited_by_accounts_count'],
+                    'error': str(e)
+                }
+                all_citing_articles_data.append(error_row)
+                all_citing_titles.append('Error')
+            
+                citing_articles_details.append({
+                    'source_doi': source_doi,
+                    'citing_doi': citing_doi,
+                    'citing_title': 'Error',
+                    'citing_authors': 'Error',
+                    'citing_year': 'Unknown',
+                    'citing_journal': 'Error',
+                    'citation_count': 0,
+                    'altmetric_score': altmetric_data['altmetric_score'],
+                    'number_of_mentions': altmetric_data['cited_by_posts_count']
+                })
+        
+            # Update progress
+            progress_bar.progress((i + 1) / len(all_citing_connections))
 
+        status_text.empty()
+        progress_bar.empty()
+
+        # Create DataFrame with all connections
+        citing_articles_df = pd.DataFrame(all_citing_articles_data) if all_citing_articles_data else pd.DataFrame()
         citing_details_df = pd.DataFrame(citing_articles_details) if citing_articles_details else pd.DataFrame()
 
         return citing_articles_df, citing_details_df, citing_results, all_citing_titles
@@ -2970,4 +2952,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
