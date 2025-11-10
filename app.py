@@ -383,79 +383,6 @@ class FastAffiliationProcessor:
             return []
 
 # =============================================
-# ALT METRIC PROCESSOR
-# =============================================
-
-class AltmetricProcessor:
-    """Processor for collecting altmetric data"""
-
-    def __init__(self):
-        self.altmetric_cache = {}
-
-    def clean_doi(self, doi: str) -> str:
-        """Cleans DOI from extra characters, prefixes and spaces."""
-        if not doi or doi in ['Unknown', 'Error', '']:
-            return None
-
-        doi = doi.strip().lower()
-        doi = re.sub(r'^(doi:)?\s*', '', doi)  # Removes "doi:" and spaces
-        doi = re.sub(r'\s+', '', doi)  # Removes extra spaces
-        if re.match(r'^10\.\d{4,9}/[-._;()/:a-zA-Z0-9]+$', doi):
-            return doi
-        return None
-
-    @retry(stop=stop_after_attempt(Config.MAX_RETRIES),
-           wait=wait_exponential(multiplier=1, min=Config.RETRY_DELAY, max=10),
-           retry=retry_if_exception_type((requests.exceptions.RequestException,
-                                        requests.exceptions.Timeout,
-                                        requests.exceptions.ConnectionError)))
-    @sleep_and_retry
-    @limits(calls=15, period=1)
-    def get_altmetric_data(self, doi: str) -> Dict:
-        """Gets data from free Altmetric API by DOI."""
-        clean_doi = self.clean_doi(doi)
-        if not clean_doi:
-            return None
-
-        if clean_doi in self.altmetric_cache:
-            return self.altmetric_cache[clean_doi]
-
-        url = f"https://api.altmetric.com/v1/doi/{clean_doi}"
-        try:
-            response = requests.get(url, timeout=Config.REQUEST_TIMEOUT)
-            if response.status_code == 200:
-                data = response.json()
-                self.altmetric_cache[clean_doi] = data
-                return data
-            else:
-                self.altmetric_cache[clean_doi] = None
-                return None
-        except requests.exceptions.RequestException:
-            self.altmetric_cache[clean_doi] = None
-            return None
-
-    def get_altmetric_metrics(self, doi: str) -> Dict[str, Any]:
-        """Extracts key altmetric indicators for DOI"""
-        data = self.get_altmetric_data(doi)
-
-        if not data:
-            return {
-                'altmetric_score': 0,
-                'cited_by_posts_count': 0,
-                'cited_by_tweeters_count': 0,
-                'cited_by_feeds_count': 0,
-                'cited_by_accounts_count': 0
-            }
-
-        return {
-            'altmetric_score': data.get('score', 0),
-            'cited_by_posts_count': data.get('cited_by_posts_count', 0),
-            'cited_by_tweeters_count': data.get('cited_by_tweeters_count', 0),
-            'cited_by_feeds_count': data.get('cited_by_feeds_count', 0),
-            'cited_by_accounts_count': data.get('cited_by_accounts_count', 0)
-        }
-
-# =============================================
 # MAIN CITATION ANALYZER
 # =============================================
 
@@ -474,7 +401,6 @@ class CitationAnalyzer:
         self.stop_words = set(stopwords.words('english'))
         self.stemmer = PorterStemmer()
         self.fast_affiliation_processor = FastAffiliationProcessor()
-        self.altmetric_processor = AltmetricProcessor()
         self.scientific_stopwords = {
             'using', 'based', 'study', 'studies', 'research', 'analysis',
             'effect', 'effects', 'properties', 'property', 'development',
@@ -691,8 +617,8 @@ class CitationAnalyzer:
                         affiliations.add(main_org)
                 
                 if country_code and country_code != 'Unknown':
-                    country_name = self.fast_affiliation_processor.get_country_display(country_code)
-                    countries.add(country_name)
+                    # Use short country code instead of full name
+                    countries.add(country_code)
 
         except Exception as e:
             self.logger.debug(f"Error extracting affiliations from OpenAlex: {e}")
@@ -770,11 +696,10 @@ class CitationAnalyzer:
             return 1
 
     def get_combined_article_data(self, doi: str) -> Dict[str, Any]:
-        """Get combined data from both Crossref and OpenAlex with improved affiliation processing and altmetrics"""
+        """Get combined data from both Crossref and OpenAlex with improved affiliation processing"""
         try:
             crossref_data = self.get_crossref_data(doi)
             openalex_data = self.get_openalex_data(doi)
-            altmetric_data = self.altmetric_processor.get_altmetric_metrics(doi)
 
             title = 'Unknown'
             if openalex_data and openalex_data.get('title'):
@@ -849,12 +774,7 @@ class CitationAnalyzer:
                 'citation_count_openalex': openalex_citations,
                 'affiliations': '; '.join(affiliations),
                 'countries': countries,
-                'years_since_publication': years_since_pub,
-                'altmetric_score': altmetric_data['altmetric_score'],
-                'number_of_mentions': altmetric_data['cited_by_posts_count'],
-                'x_mentions': altmetric_data['cited_by_tweeters_count'],
-                'rss_blogs': altmetric_data['cited_by_feeds_count'],
-                'unique_accounts': altmetric_data['cited_by_accounts_count']
+                'years_since_publication': years_since_pub
             }
         except Exception as e:
             return {
@@ -874,11 +794,6 @@ class CitationAnalyzer:
                 'affiliations': 'Error',
                 'countries': 'Error',
                 'years_since_publication': 1,
-                'altmetric_score': 0,
-                'number_of_mentions': 0,
-                'x_mentions': 0,
-                'rss_blogs': 0,
-                'unique_accounts': 0,
                 'error': str(e)
             }
 
@@ -904,7 +819,7 @@ class CitationAnalyzer:
             else:
                 final_affiliations = ['Unknown']
 
-            # Combine countries
+            # Combine countries - use short codes
             all_countries = set()
             if openalex_countries and openalex_countries != 'Unknown':
                 countries_list = openalex_countries.split(';')
@@ -936,8 +851,8 @@ class CitationAnalyzer:
                             affiliations.add(main_org)
                     
                     if country_code and country_code != 'Unknown':
-                        country_name = self.fast_affiliation_processor.get_country_display(country_code)
-                        countries.add(country_name)
+                        # Use short country code
+                        countries.add(country_code)
                 
                 return list(affiliations) or ['Unknown'], ';'.join(sorted(countries)) if countries else 'Unknown'
             
@@ -956,8 +871,8 @@ class CitationAnalyzer:
                             affiliations.add(main_org)
 
                     if country_code:
-                        country_name = self.fast_affiliation_processor.get_country_display(country_code)
-                        countries.add(country_name)
+                        # Use short country code
+                        countries.add(country_code)
 
             return list(affiliations) or ['Unknown'], ';'.join(sorted(countries)) if countries else 'Unknown'
         except Exception as e:
@@ -1172,9 +1087,7 @@ class CitationAnalyzer:
                     'author_count': 0, 'year': 'Unknown', 'journal_full_name': 'Error',
                     'journal_abbreviation': 'Error', 'publisher': 'Error',
                     'citation_count_crossref': 0, 'citation_count_openalex': 0,
-                    'years_since_publication': 1, 'affiliations': 'Error', 'countries': 'Error',
-                    'altmetric_score': 0, 'number_of_mentions': 0, 'x_mentions': 0,
-                    'rss_blogs': 0, 'unique_accounts': 0
+                    'years_since_publication': 1, 'affiliations': 'Error', 'countries': 'Error'
                 }
                 all_citing_titles.append('Error')
 
@@ -1210,11 +1123,6 @@ class CitationAnalyzer:
                 'years_since_publication': article_data.get('years_since_publication', 1),
                 'affiliations': article_data.get('affiliations', 'Unknown'),
                 'countries': article_data.get('countries', 'Unknown'),
-                'altmetric_score': article_data.get('altmetric_score', 0),
-                'number_of_mentions': article_data.get('number_of_mentions', 0),
-                'x_mentions': article_data.get('x_mentions', 0),
-                'rss_blogs': article_data.get('rss_blogs', 0),
-                'unique_accounts': article_data.get('unique_accounts', 0),
                 'error': None
             }
             all_citing_articles_data.append(citing_row)
@@ -1233,9 +1141,7 @@ class CitationAnalyzer:
                     'citing_authors': article_data.get('authors_with_initials', 'Unknown'),
                     'citing_year': article_data.get('year', 'Unknown'),
                     'citing_journal': article_data.get('journal_abbreviation', 'Unknown'),
-                    'citation_count': article_data.get('citation_count_openalex', 0),
-                    'altmetric_score': article_data.get('altmetric_score', 0),
-                    'number_of_mentions': article_data.get('number_of_mentions', 0)
+                    'citation_count': article_data.get('citation_count_openalex', 0)
                 })
 
         citing_details_df = pd.DataFrame(citing_articles_details) if citing_articles_details else pd.DataFrame()
@@ -1518,7 +1424,12 @@ class CitationAnalyzer:
 
             country_freq = country_freq_total.merge(country_freq_unique, on=['countries', 'type'], how='outer').fillna(0)
 
-            return country_freq[['countries', 'type', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique']].sort_values('frequency_total', ascending=False)
+            # Add full country names
+            country_freq['country_fullname'] = country_freq['countries'].apply(
+                lambda x: ';'.join([self.fast_affiliation_processor.get_country_display(code) for code in x.split(';')])
+            )
+
+            return country_freq[['countries', 'country_fullname', 'type', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique']].sort_values('frequency_total', ascending=False)
         except Exception as e:
             return pd.DataFrame()
 
@@ -1686,7 +1597,6 @@ All standard statistical analyses performed (authors, journals, countries, etc.)
 Error handling ensures report generation even with partial data
 Duplicate citations show articles that cite multiple source articles
 Affiliations normalized and grouped for consistent organization names
-Altmetric metrics included for social media and online attention analysis
 """
 
             # Create Report_Summary tab first
@@ -1861,12 +1771,7 @@ Altmetric metrics included for social media and online attention analysis
                         'affiliations': article_data['affiliations'],
                         'countries': article_data['countries'],
                         'publication_year': article_data.get('publication_year'),
-                        'years_since_publication': article_data['years_since_publication'],
-                        'altmetric_score': article_data['altmetric_score'],
-                        'number_of_mentions': article_data['number_of_mentions'],
-                        'x_mentions': article_data['x_mentions'],
-                        'rss_blogs': article_data['rss_blogs'],
-                        'unique_accounts': article_data['unique_accounts']
+                        'years_since_publication': article_data['years_since_publication']
                     }
                 except Exception as e:
                     self.unique_ref_data_cache[doi] = {
@@ -1875,9 +1780,7 @@ Altmetric metrics included for social media and online attention analysis
                         'year': 'Unknown', 'journal_full_name': 'Error',
                         'journal_abbreviation': 'Error', 'publisher': 'Error',
                         'citation_count_crossref': 'N/A', 'citation_count_openalex': 'N/A',
-                        'affiliations': 'Error', 'countries': 'Error', 'error': str(e),
-                        'altmetric_score': 0, 'number_of_mentions': 0, 'x_mentions': 0,
-                        'rss_blogs': 0, 'unique_accounts': 0
+                        'affiliations': 'Error', 'countries': 'Error', 'error': str(e)
                     }
                 time.sleep(Config.DELAY_BETWEEN_REQUESTS)
                 
@@ -1920,11 +1823,6 @@ Altmetric metrics included for social media and online attention analysis
                     'years_since_publication': source_data['years_since_publication'],
                     'affiliations': source_data['affiliations'],
                     'countries': source_data['countries'],
-                    'altmetric_score': source_data['altmetric_score'],
-                    'number_of_mentions': source_data['number_of_mentions'],
-                    'x_mentions': source_data['x_mentions'],
-                    'rss_blogs': source_data['rss_blogs'],
-                    'unique_accounts': source_data['unique_accounts'],
                     'error': None
                 }
                 source_articles.append(source_row)
@@ -1936,7 +1834,6 @@ Altmetric metrics included for social media and online attention analysis
                     'publisher': 'Error', 'citation_count_crossref': 'N/A', 'citation_count_openalex': 'N/A',
                     'annual_citation_rate_crossref': 'N/A', 'annual_citation_rate_openalex': 'N/A',
                     'years_since_publication': 'N/A', 'affiliations': 'Error', 'countries': 'Error',
-                    'altmetric_score': 0, 'number_of_mentions': 0, 'x_mentions': 0, 'rss_blogs': 0, 'unique_accounts': 0,
                     'error': str(e)
                 })
 
@@ -1972,11 +1869,6 @@ Altmetric metrics included for social media and online attention analysis
                         'years_since_publication': ref_info['years_since_publication'],
                         'affiliations': ref_info['affiliations'],
                         'countries': ref_info['countries'],
-                        'altmetric_score': ref_info['altmetric_score'],
-                        'number_of_mentions': ref_info['number_of_mentions'],
-                        'x_mentions': ref_info['x_mentions'],
-                        'rss_blogs': ref_info['rss_blogs'],
-                        'unique_accounts': ref_info['unique_accounts'],
                         'error': None
                     }
                     results.append(ref_row)
@@ -2007,11 +1899,6 @@ Altmetric metrics included for social media and online attention analysis
                             'years_since_publication': ref_info['years_since_publication'],
                             'affiliations': ref_info['affiliations'],
                             'countries': ref_info['countries'],
-                            'altmetric_score': ref_info['altmetric_score'],
-                            'number_of_mentions': ref_info['number_of_mentions'],
-                            'x_mentions': ref_info['x_mentions'],
-                            'rss_blogs': ref_info['rss_blogs'],
-                            'unique_accounts': ref_info['unique_accounts'],
                             'error': None
                         }
                         results.append(ref_row)
@@ -2024,7 +1911,6 @@ Altmetric metrics included for social media and online attention analysis
                             'citation_count_crossref': 'N/A', 'citation_count_openalex': 'N/A',
                             'annual_citation_rate_crossref': 'N/A', 'annual_citation_rate_openalex': 'N/A',
                             'years_since_publication': 'N/A', 'affiliations': 'Unknown', 'countries': 'Unknown',
-                            'altmetric_score': 0, 'number_of_mentions': 0, 'x_mentions': 0, 'rss_blogs': 0, 'unique_accounts': 0,
                             'error': f"Invalid or missing DOI: {ref_doi}, no match found for title '{title}'"
                         })
 
@@ -2110,11 +1996,6 @@ Altmetric metrics included for social media and online attention analysis
                         'years_since_publication': enhanced_data['years_since_publication'],
                         'affiliations': enhanced_data['affiliations'],
                         'countries': enhanced_data['countries'],
-                        'altmetric_score': enhanced_data['altmetric_score'],
-                        'number_of_mentions': enhanced_data['number_of_mentions'],
-                        'x_mentions': enhanced_data['x_mentions'],
-                        'rss_blogs': enhanced_data['rss_blogs'],
-                        'unique_accounts': enhanced_data['unique_accounts'],
                         'error': None
                     }
                     enhanced_rows.append(enhanced_row)
@@ -2364,7 +2245,12 @@ Altmetric metrics included for social media and online attention analysis
 
             country_freq = country_freq_total.merge(country_freq_unique, on=['countries', 'type'], how='outer').fillna(0)
 
-            return country_freq[['countries', 'type', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique']].sort_values('frequency_total', ascending=False)
+            # Add full country names
+            country_freq['country_fullname'] = country_freq['countries'].apply(
+                lambda x: ';'.join([self.fast_affiliation_processor.get_country_display(code) for code in x.split(';')])
+            )
+
+            return country_freq[['countries', 'country_fullname', 'type', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique']].sort_values('frequency_total', ascending=False)
         except Exception as e:
             return pd.DataFrame()
 
@@ -2458,7 +2344,7 @@ Altmetric metrics included for social media and online attention analysis
         for word in words:
             if '-' in word:
                 continue
-            if len(word) > 2 and word not in self.stop_words:
+            if len(word) > 2 and word not in self.stop_words and word != 'sub':
                 stemmed_word = self.stemmer.stem(word)
                 if stemmed_word not in self.scientific_stopwords_stemmed:
                     content_words.append(stemmed_word)
@@ -2503,7 +2389,7 @@ Altmetric metrics included for social media and online attention analysis
     def save_all_data_to_excel(self, combined_df: pd.DataFrame, source_articles_df: pd.DataFrame,
                          doi_list: List[str], total_references: int, unique_dois: int,
                          all_titles: List[str]) -> str:
-        """Saves references analysis to Excel with altmetrics"""
+        """Saves references analysis to Excel"""
         try:
             timestamp = int(time.time())
             temp_dir = tempfile.mkdtemp()
@@ -2549,13 +2435,9 @@ Altmetric metrics included for social media and online attention analysis
                 affiliations_with_data = combined_df[combined_df['affiliations'].isin(['Unknown', 'Error']) == False]
                 affiliations_percentage = (len(affiliations_with_data) / total_processed * 100) if total_processed > 0 else 0
 
-                altmetric_with_data = combined_df[combined_df['altmetric_score'] > 0]
-                altmetric_percentage = (len(altmetric_with_data) / total_processed * 100) if total_processed > 0 else 0
-
             except Exception as e:
                 countries_percentage = 0
                 affiliations_percentage = 0
-                altmetric_percentage = 0
 
             summary_content = f"""@MedvDmitry production
 
@@ -2582,21 +2464,12 @@ DATA COMPLETENESS
 =================
 References with country data: {countries_percentage:.1f}%
 References with affiliation data: {affiliations_percentage:.1f}%
-References with altmetric data: {altmetric_percentage:.1f}%
 
 AFFILIATION PROCESSING
 ======================
 Affiliations normalized and grouped by organization
 Similar affiliations merged together
 Frequency counts reflect grouped organizations
-
-ALTMETRIC METRICS INCLUDED
-==========================
-Altmetric Score: Overall attention score
-Number of Mentions: Posts mentioning the article
-X Mentions: Twitter/X accounts mentioning
-RSS/Blogs: Blog and RSS feed mentions
-Unique Accounts: Unique accounts across platforms
 
 PERFORMANCE STATISTICS
 ======================
@@ -2611,7 +2484,6 @@ Combined data from Crossref and OpenAlex improves completeness
 All standard statistical analyses performed (authors, journals, countries, etc.)
 Error handling ensures report generation even with partial data
 Affiliations normalized and grouped for consistent organization names
-Altmetric metrics provide social media and online attention analysis
 """
 
             # Create Report_Summary tab first
@@ -2862,7 +2734,7 @@ def main():
                             if citing_articles_df is not None and not citing_articles_df.empty:
                                 st.subheader("Citing Articles (Sample)")
                                 display_cols = ['source_doi', 'doi', 'title', 'authors_with_initials', 'author_count', 'year', 'journal_abbreviation',
-                                              'citation_count_openalex', 'altmetric_score', 'number_of_mentions']
+                                              'citation_count_openalex']
                                 st.dataframe(citing_articles_df[display_cols].head(10))
                             
                             # Generate and download Excel report
@@ -2899,4 +2771,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
