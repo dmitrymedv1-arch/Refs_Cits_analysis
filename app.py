@@ -1149,34 +1149,88 @@ class CitationAnalyzer:
                     'citing_doi': citing_doi
                 })
 
-        # Cache unique citing article data
+        # Cache unique citing article data - ИСПОЛЬЗУЕМ ПРАВИЛЬНЫЙ ПОДХОД
         all_citing_dois = set(conn['citing_doi'] for conn in all_citing_connections)
-        citing_data_cache = {}
-
+    
         progress_bar = st.progress(0)
         status_text = st.empty()
-        
+    
+        # ОБРАБАТЫВАЕМ КАЖДУЮ ЦИТИРУЮЩУЮ СТАТЬЮ ОТДЕЛЬНО
         for i, citing_doi in enumerate(all_citing_dois):
             try:
                 status_text.text(f"Processing citing article {i+1}/{len(all_citing_dois)}: {citing_doi}")
+            
+                # КРИТИЧЕСКИ ВАЖНО: получаем полные данные для каждой цитирующей статьи
                 article_data = self.get_combined_article_data(citing_doi)
-                citing_data_cache[citing_doi] = article_data
+            
+                # Сохраняем в отдельный кэш для цитирующих статей
+                self.unique_citation_data_cache[citing_doi] = article_data
                 all_citing_titles.append(article_data['title'])
                 time.sleep(Config.DELAY_BETWEEN_REQUESTS)
-                
+            
                 # Update progress
                 progress_bar.progress((i + 1) / len(all_citing_dois))
+            
             except Exception as e:
-                citing_data_cache[citing_doi] = {
-                    'title': 'Error', 'authors': 'Error', 'authors_with_initials': 'Error',
-                    'author_count': 0, 'year': 'Unknown', 'journal_full_name': 'Error',
-                    'journal_abbreviation': 'Error', 'publisher': 'Error',
-                    'citation_count_crossref': 0, 'citation_count_openalex': 0,
-                    'years_since_publication': 1, 'affiliations': 'Error', 'countries': 'Error',
-                    'altmetric_score': 0, 'number_of_mentions': 0, 'x_mentions': 0,
-                    'rss_blogs': 0, 'unique_accounts': 0
-                }
-                all_citing_titles.append('Error')
+                # ПРИ ОШИБКЕ: пытаемся получить хотя бы базовые данные с реальными альтметриками
+                st.warning(f"Error processing citing article {citing_doi}: {str(e)[:100]}...")
+                try:
+                    # Получаем альтметрики ОТДЕЛЬНО
+                    altmetric_data = self.altmetric_processor.get_altmetric_metrics(citing_doi)
+                
+                    # Создаем базовый объект с реальными альтметриками
+                    article_data = {
+                        'doi': citing_doi,
+                        'title': 'Unknown',
+                        'authors': 'Unknown', 
+                        'authors_with_initials': 'Unknown',
+                        'author_count': 0,
+                        'year': 'Unknown',
+                        'journal_full_name': 'Unknown',
+                        'journal_abbreviation': 'Unknown',
+                        'publisher': 'Unknown',
+                        'citation_count_crossref': 0,
+                        'citation_count_openalex': 0,
+                        'affiliations': 'Unknown',
+                        'countries': 'Unknown',
+                        'years_since_publication': 1,
+                        'publication_year': None,
+                        # РЕАЛЬНЫЕ данные альтметрик
+                        'altmetric_score': altmetric_data['altmetric_score'],
+                        'number_of_mentions': altmetric_data['cited_by_posts_count'],
+                        'x_mentions': altmetric_data['cited_by_tweeters_count'],
+                        'rss_blogs': altmetric_data['cited_by_feeds_count'],
+                        'unique_accounts': altmetric_data['cited_by_accounts_count']
+                    }
+                    self.unique_citation_data_cache[citing_doi] = article_data
+                    all_citing_titles.append('Unknown')
+                except Exception as altmetric_error:
+                    # Крайний случай - только тогда нули
+                    article_data = {
+                        'doi': citing_doi,
+                        'title': 'Error', 
+                        'authors': 'Error', 
+                        'authors_with_initials': 'Error',
+                        'author_count': 0, 
+                        'year': 'Unknown', 
+                        'journal_full_name': 'Error',
+                        'journal_abbreviation': 'Error', 
+                        'publisher': 'Error',
+                        'citation_count_crossref': 0, 
+                        'citation_count_openalex': 0,
+                        'years_since_publication': 1, 
+                        'affiliations': 'Error', 
+                        'countries': 'Error',
+                        'publication_year': None,
+                        # Нули только если совсем не получилось
+                        'altmetric_score': 0, 
+                        'number_of_mentions': 0, 
+                        'x_mentions': 0,
+                        'rss_blogs': 0, 
+                        'unique_accounts': 0
+                    }
+                    self.unique_citation_data_cache[citing_doi] = article_data
+                    all_citing_titles.append('Error')
 
         status_text.empty()
         progress_bar.empty()
@@ -1186,9 +1240,11 @@ class CitationAnalyzer:
             citing_doi = connection['citing_doi']
             source_doi = connection['source_doi']
 
-            article_data = citing_data_cache.get(citing_doi, {})
+            # Берем данные из правильного кэша
+            article_data = self.unique_citation_data_cache.get(citing_doi, {})
+        
             citing_row = {
-                'source_doi': source_doi,  # CORRECT - preserve source
+                'source_doi': source_doi,
                 'position': 'N/A',
                 'doi': citing_doi,
                 'title': article_data.get('title', 'Unknown'),
@@ -1210,6 +1266,7 @@ class CitationAnalyzer:
                 'years_since_publication': article_data.get('years_since_publication', 1),
                 'affiliations': article_data.get('affiliations', 'Unknown'),
                 'countries': article_data.get('countries', 'Unknown'),
+                # ВАЖНО: передаем реальные альтметрики из правильного источника
                 'altmetric_score': article_data.get('altmetric_score', 0),
                 'number_of_mentions': article_data.get('number_of_mentions', 0),
                 'x_mentions': article_data.get('x_mentions', 0),
@@ -1225,7 +1282,7 @@ class CitationAnalyzer:
         # Create details table
         for source_doi, data in citing_results.items():
             for citing_doi in data['citing_dois']:
-                article_data = citing_data_cache.get(citing_doi, {})
+                article_data = self.unique_citation_data_cache.get(citing_doi, {})
                 citing_articles_details.append({
                     'source_doi': source_doi,
                     'citing_doi': citing_doi,
@@ -2864,6 +2921,20 @@ def main():
                                 display_cols = ['source_doi', 'doi', 'title', 'authors_with_initials', 'author_count', 'year', 'journal_abbreviation',
                                               'citation_count_openalex', 'altmetric_score', 'number_of_mentions']
                                 st.dataframe(citing_articles_df[display_cols].head(10))
+
+                                # Проверяем наличие ненулевых альтметрик
+                                non_zero_altmetrics = citing_articles_df[citing_articles_df['altmetric_score'] > 0]
+                                if len(non_zero_altmetrics) > 0:
+                                    st.success(f"✅ Found {len(non_zero_altmetrics)} citing articles with non-zero altmetrics")
+                                    # Показываем статьи с наибольшими альтметриками
+                                    top_altmetrics = non_zero_altmetrics.nlargest(5, 'altmetric_score')[['doi', 'title', 'journal_abbreviation', 'altmetric_score', 'number_of_mentions']]
+                                    st.write("Top articles by altmetric score:")
+                                    st.dataframe(top_altmetrics)
+                                else:
+                                    st.warning("⚠️ No citing articles with non-zero altmetrics found. This may indicate:")
+                                    st.write("- Altmetric API rate limiting")
+                                    st.write("- Articles too new to have altmetric data")
+                                    st.write("- Technical issues with Altmetric service")
                             
                             # Generate and download Excel report
                             excel_path = st.session_state.analyzer.save_citation_analysis_to_excel(
@@ -2899,3 +2970,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
