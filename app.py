@@ -277,45 +277,46 @@ class AffiliationExtractor:
             'universität', 'universitat', 'université', 'universite', 'polytechnic',
             'center', 'centre', 'laboratory', 'department', 'division', 'group'
         }
-        # Remove department_keywords since we now preserve all organizational units
         self.higher_education_keywords = {
-            'university', 'college', 'institute', 'academy', 'polytechnic'
+            'university', 'institute'
         }
         self.location_indicators = {
             'street', 'avenue', 'boulevard', 'road', 'lane', 'drive', 'st.', 'ave.', 'blvd.', 'rd.',
             'box', 'p.o.', 'p.o. box', 'post office', 'postal', 'zip', 'postcode', 'post code',
             'city', 'town', 'village', 'district', 'region', 'province', 'state', 'county',
             'russia', 'china', 'usa', 'germany', 'france', 'uk', 'japan', 'korea', 'india', 'brazil',
-            'moscow', 'beijing', 'london', 'tokyo', 'berlin', 'paris', 'yekaterinburg', 'guangzhou'
+            'moscow', 'beijing', 'london', 'tokyo', 'berlin', 'paris', 'yekaterinburg', 'guangzhou',
+            'russian federation', 'united states', 'united kingdom', 'south korea'
         }
+        
     def extract_main_organization(self, affiliation_text: str) -> str:
-        """Extract main organization from full affiliation text with hierarchy preservation"""
+        """Extract main organization from full affiliation text with hierarchy and comma structure"""
         if not affiliation_text or affiliation_text in ['Unknown', 'Error', '']:
             return "Unknown"
     
-        # Clean the affiliation text
+        # Clean the affiliation text but preserve commas for structure analysis
         clean_text = affiliation_text.strip()
     
         # Remove email addresses
         clean_text = re.sub(r'\S+@\S+', '', clean_text)
     
-        # Remove postal codes and addresses
+        # Remove postal codes and addresses but keep commas for organizational structure
         clean_text = re.sub(r'\d{5,}(?:-\d{4})?', '', clean_text)
         clean_text = re.sub(r'p\.?o\.? box \d+', '', clean_text, flags=re.IGNORECASE)
         clean_text = re.sub(r'\b\d+\s+[a-zA-Z]+\s+[a-zA-Z]+\b', '', clean_text)
     
-        # Split by common separators
-        parts = re.split(r'[,;]', clean_text)
+        # Split by common separators - preserve the order
+        parts = [part.strip() for part in re.split(r'[,;]', clean_text) if part.strip()]
     
-        # Define organization hierarchy
+        # Define organization hierarchy (lower number = higher level)
         hierarchy_levels = {
             'university': 1,
             'academy': 1,
             'institute': 2,
-            'college': 2, 
+            'college': 3,
             'school': 3,
             'faculty': 3,
-            'department': 4,
+            'department': 3,
             'division': 4,
             'laboratory': 5,
             'lab': 5,
@@ -324,52 +325,81 @@ class AffiliationExtractor:
             'group': 5
         }
     
+        # Remove Russian Academy of Sciences branches and similar patterns
+        patterns_to_remove = [
+            r'\bof the \w+ Branch of the Russian Academy of Sciences\b',
+            r'\bof the \w+ Branch of RAS\b',
+            r'\bRussian Academy of Sciences\b',
+            r'\bUral Branch.*Russian Academy\b',
+            r'\bRAS\b'
+        ]
+    
+        cleaned_parts = []
+        for part in parts:
+            clean_part = part
+            for pattern in patterns_to_remove:
+                clean_part = re.sub(pattern, '', clean_part, flags=re.IGNORECASE)
+            clean_part = clean_part.strip()
+            if clean_part and len(clean_part) > 3:
+                cleaned_parts.append(clean_part)
+    
+        if not cleaned_parts:
+            return "Unknown"
+    
+        # Analyze hierarchy in the cleaned parts
         best_org = None
         best_level = float('inf')
     
-        for part in parts:
-            part = part.strip()
-            if not part or len(part) < 5:
-                continue
-            
+        for part in cleaned_parts:
             part_lower = part.lower()
         
-            # Check if this part contains any organization keywords
-            has_org_keyword = False
-            current_level = float('inf')
+            # Skip parts that are clearly locations
+            is_location = any(location in part_lower for location in self.location_indicators)
+            if is_location:
+                continue
         
+            # Check organization level
+            current_level = float('inf')
             for org_keyword, level in hierarchy_levels.items():
                 if org_keyword in part_lower:
-                    has_org_keyword = True
                     current_level = min(current_level, level)
                     break
         
-            # Skip parts that look like locations
-            has_location = any(location in part_lower for location in self.location_indicators)
+            # If no organization keyword found, skip
+            if current_level == float('inf'):
+                continue
         
-            if has_org_keyword and not has_location:
-                # If this is a higher level organization (lower number), use it
-                if current_level < best_level:
-                    best_level = current_level
+            # Apply hierarchy logic
+            if current_level < best_level:
+                best_level = current_level
+                best_org = part
+            elif current_level == best_level:
+                # If same level, prefer the one that appears later (usually the main org comes after departments)
+                # But only if it doesn't contain the previous one (avoid sub-departments)
+                if best_org and best_org.lower() not in part_lower:
                     best_org = part
-                # If same level, prefer the one that comes first in the affiliation
-                elif current_level == best_level and best_org is not None:
-                    # Check if current part contains the previous best org (hierarchical relationship)
-                    if best_org.lower() in part_lower:
-                        best_org = part
     
-        # If we found a good candidate, return it
-        if best_org:
+        # If we found a high-level organization, return it
+        if best_org and best_level <= 2:  # University or Institute level
             return self.clean_organization_name(best_org)
     
-        # Fallback: use the first significant part that doesn't look like a location
-        for part in parts:
-            part = part.strip()
-            if len(part) > 10 and not any(location in part.lower() for location in self.location_indicators):
-                return self.clean_organization_name(part)
+        # Fallback: look for any university or institute in any part
+        for part in cleaned_parts:
+            part_lower = part.lower()
+            if any(keyword in part_lower for keyword in ['university', 'college', 'institute', 'academy']):
+                # Remove department prefixes if present
+                clean_org = self.remove_department_prefix(part)
+                return self.clean_organization_name(clean_org)
     
-        # Last resort: use the cleaned original text
-        return self.clean_organization_name(clean_text)
+        # Last resort: use the first non-location part
+        for part in cleaned_parts:
+            part_lower = part.lower()
+            if not any(location in part_lower for location in self.location_indicators):
+                clean_org = self.remove_department_prefix(part)
+                return self.clean_organization_name(clean_org)
+    
+        # Final fallback
+        return self.clean_organization_name(cleaned_parts[0] if cleaned_parts else clean_text)
 
     def clean_organization_name(self, org_name: str) -> str:
         """Clean and normalize organization name without removing organizational units"""
@@ -494,6 +524,37 @@ class AffiliationExtractor:
             pass
 
         return list(affiliations), list(countries)
+
+    def remove_department_prefix(self, org_name: str) -> str:
+        """Remove department/school prefixes to get the main organization"""
+        if not org_name:
+            return org_name
+    
+        # Patterns to remove (department/school prefixes)
+        department_patterns = [
+            r'^School of \w+(?:\s+\w+)*,\s*',
+            r'^Department of \w+(?:\s+\w+)*,\s*', 
+            r'^Institute of \w+(?:\s+\w+)*,\s*',
+            r'^Faculty of \w+(?:\s+\w+)*,\s*',
+            r'^College of \w+(?:\s+\w+)*,\s*',
+            r'^Laboratory of \w+(?:\s+\w+)*,\s*',
+            r'^Center for \w+(?:\s+\w+)*,\s*',
+            r'^Centre for \w+(?:\s+\w+)*,\s*',
+        ]
+    
+        cleaned = org_name.strip()
+    
+        # Try to remove department prefixes
+        for pattern in department_patterns:
+            match = re.search(pattern, cleaned, re.IGNORECASE)
+            if match:
+                # Get the part after the comma (main organization)
+                remaining = cleaned[match.end():].strip()
+                if remaining and any(keyword in remaining.lower() for keyword in ['university', 'college', 'institute']):
+                    return remaining
+    
+        # If no pattern matched or no main organization found, return original
+        return cleaned
 
     def _extract_country_from_affiliation(self, affiliation_data: Dict) -> str:
         """Extracts country from Crossref affiliation data"""
@@ -3447,6 +3508,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
