@@ -875,7 +875,7 @@ class CitationAnalyzer:
                         for affil in author['affiliation']:
                             if 'name' in affil:
                                 affiliation_name = affil['name'].strip()
-                               if affiliation_name and affiliation_name not in ['', 'None', 'Unknown']:
+                                if affiliation_name and affiliation_name not in ['', 'None', 'Unknown']:
                                     crossref_affiliations.append(affiliation_name)
                         
                             # Простая логика для стран из Crossref
@@ -3254,6 +3254,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
