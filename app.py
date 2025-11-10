@@ -269,13 +269,128 @@ class AuthorExtractor:
 
 # ====== AFFILIATION EXTRACTION ======
 class AffiliationExtractor:
-    """Extract affiliations and countries from Crossref and OpenAlex data"""
+    """Extract affiliations and countries from Crossref and OpenAlex data with intelligent organization extraction"""
     
     def __init__(self):
-        pass
-    
+        self.organization_keywords = {
+            'university', 'college', 'institute', 'school', 'faculty', 'academy',
+            'universität', 'universitat', 'université', 'universite', 'polytechnic',
+            'center', 'centre', 'laboratory', 'department', 'division', 'group'
+        }
+        self.department_keywords = {
+            'laboratory', 'department', 'division', 'group', 'section', 'unit',
+            'faculty', 'school', 'college', 'program', 'center', 'centre'
+        }
+        self.higher_education_keywords = {
+            'university', 'college', 'institute', 'academy', 'polytechnic'
+        }
+        self.location_indicators = {
+            'street', 'avenue', 'boulevard', 'road', 'lane', 'drive', 'st.', 'ave.', 'blvd.', 'rd.',
+            'box', 'p.o.', 'p.o. box', 'post office', 'postal', 'zip', 'postcode', 'post code',
+            'city', 'town', 'village', 'district', 'region', 'province', 'state', 'county',
+            'russia', 'china', 'usa', 'germany', 'france', 'uk', 'japan', 'korea', 'india', 'brazil',
+            'moscow', 'beijing', 'london', 'tokyo', 'berlin', 'paris', 'yekaterinburg', 'guangzhou'
+        }
+
+    def extract_main_organization(self, affiliation_text: str) -> str:
+        """Extract main organization from full affiliation text"""
+        if not affiliation_text or affiliation_text in ['Unknown', 'Error', '']:
+            return "Unknown"
+        
+        # Clean the affiliation text
+        clean_text = affiliation_text.strip()
+        
+        # Remove email addresses
+        clean_text = re.sub(r'\S+@\S+', '', clean_text)
+        
+        # Remove postal codes and addresses
+        clean_text = re.sub(r'\d{5,}(?:-\d{4})?', '', clean_text)
+        clean_text = re.sub(r'p\.?o\.? box \d+', '', clean_text, flags=re.IGNORECASE)
+        clean_text = re.sub(r'\b\d+\s+[a-zA-Z]+\s+[a-zA-Z]+\b', '', clean_text)
+        
+        # Split by common separators
+        parts = re.split(r'[,;]', clean_text)
+        
+        # Look for the main organization part
+        main_org_candidates = []
+        
+        for part in parts:
+            part = part.strip()
+            if not part or len(part) < 5:
+                continue
+                
+            part_lower = part.lower()
+            
+            # Check if this part contains organization keywords but not location indicators
+            has_org_keyword = any(keyword in part_lower for keyword in self.organization_keywords)
+            has_location = any(location in part_lower for location in self.location_indicators)
+            has_department = any(dept in part_lower for dept in self.department_keywords)
+            
+            # Priority: higher education institutions > research institutes > departments
+            if has_org_keyword and not has_location:
+                if any(he_keyword in part_lower for he_keyword in self.higher_education_keywords):
+                    # Higher education institution found - this is likely the main organization
+                    return self.clean_organization_name(part)
+                else:
+                    main_org_candidates.append(part)
+        
+        # If we found candidates, choose the best one
+        if main_org_candidates:
+            # Prefer longer names (usually more complete)
+            main_org_candidates.sort(key=len, reverse=True)
+            return self.clean_organization_name(main_org_candidates[0])
+        
+        # Fallback: use the first significant part that doesn't look like a location
+        for part in parts:
+            part = part.strip()
+            if len(part) > 10 and not any(location in part.lower() for location in self.location_indicators):
+                return self.clean_organization_name(part)
+        
+        # Last resort: use the cleaned original text
+        return self.clean_organization_name(clean_text)
+
+    def clean_organization_name(self, org_name: str) -> str:
+        """Clean and normalize organization name"""
+        if not org_name or org_name == "Unknown":
+            return "Unknown"
+            
+        # Remove common prefixes and suffixes
+        patterns_to_remove = [
+            r'^the\s+', r'\s+the$',
+            r'\bdept\.?\s+of\b', r'\bdepartment\s+of\b',
+            r'\blaboratory\s+of\b', r'\blab\s+of\b',
+            r'\bgroup\s+of\b', r'\bdivision\s+of\b',
+            r'\bfaculty\s+of\b', r'\bschool\s+of\b',
+            r'\binstitute\s+of\b', r'\binstitution\s+of\b',
+            r'\bcollege\s+of\b', r'\bacademy\s+of\b',
+            r'\bkey\s+laboratory\b', r'\bprovincial\s+key\s+laboratory\b',
+            r'\bnational\s+key\s+laboratory\b',
+            r'\binc\.?$', r'\bltd\.?$', r'\bcorp\.?$', r'\bco\.?$',
+            r'\bllc\.?$', r'\bgmbh\.?$'
+        ]
+        
+        cleaned = org_name.strip()
+        for pattern in patterns_to_remove:
+            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+        
+        # Remove location information
+        location_patterns = [
+            r',\s*[A-Za-z\s]+\s*\d{5,}.*$',  # City with postal code
+            r',\s*\d{5,}.*$',  # Postal code
+            r',\s*[A-Za-z]+\s*[A-Za-z]+\s*\d+.*$',  # Street addresses
+        ]
+        
+        for pattern in location_patterns:
+            cleaned = re.sub(pattern, '', cleaned)
+        
+        # Clean up extra spaces and punctuation
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        cleaned = re.sub(r'^[,\s]+|[,\s]+$', '', cleaned)
+        
+        return cleaned if cleaned else "Unknown"
+
     def extract_affiliations_and_countries_from_openalex(self, openalex_data: Dict) -> Tuple[List[str], str]:
-        """Extracts affiliations and countries from OpenAlex data using improved logic"""
+        """Extracts affiliations and countries from OpenAlex data with intelligent organization extraction"""
         affiliations = set()
         countries = set()
         authors_list = []
@@ -299,8 +414,10 @@ class AffiliationExtractor:
                         country_code = inst.get('country_code')
                     
                         if inst_name:
-                            # Use the full institution name without extraction
-                            affiliations.add(inst_name)
+                            # Extract main organization from full institution name
+                            main_org = self.extract_main_organization(inst_name)
+                            if main_org and main_org != "Unknown":
+                                affiliations.add(main_org)
                         if country_code:
                             countries.add(country_code.upper())
                         
@@ -314,7 +431,7 @@ class AffiliationExtractor:
             return ['Unknown'], 'Unknown'
 
     def extract_affiliations_and_countries_from_crossref(self, crossref_data: Dict) -> Tuple[List[str], List[str]]:
-        """Extracts affiliations and countries from Crossref data"""
+        """Extracts affiliations and countries from Crossref data with intelligent organization extraction"""
         affiliations = set()
         countries = set()
 
@@ -326,7 +443,10 @@ class AffiliationExtractor:
                             if 'name' in affil:
                                 affiliation_name = affil['name'].strip()
                                 if affiliation_name and affiliation_name not in ['', 'None']:
-                                    affiliations.add(affiliation_name)
+                                    # Extract main organization from full affiliation
+                                    main_org = self.extract_main_organization(affiliation_name)
+                                    if main_org and main_org != "Unknown":
+                                        affiliations.add(main_org)
 
                             country = self._extract_country_from_affiliation(affil)
                             if country:
@@ -340,20 +460,57 @@ class AffiliationExtractor:
                             if isinstance(item, dict) and 'name' in item:
                                 affiliation_name = item['name'].strip()
                                 if affiliation_name:
-                                    affiliations.add(affiliation_name)
+                                    main_org = self.extract_main_organization(affiliation_name)
+                                    if main_org and main_org != "Unknown":
+                                        affiliations.add(main_org)
                             elif isinstance(item, str):
                                 affiliation_name = item.strip()
                                 if affiliation_name:
-                                    affiliations.add(affiliation_name)
+                                    main_org = self.extract_main_organization(affiliation_name)
+                                    if main_org and main_org != "Unknown":
+                                        affiliations.add(main_org)
                     elif isinstance(crossref_data[field], str):
                         affiliation_name = crossref_data[field].strip()
                         if affiliation_name:
-                            affiliations.add(affiliation_name)
+                            main_org = self.extract_main_organization(affiliation_name)
+                            if main_org and main_org != "Unknown":
+                                affiliations.add(main_org)
 
         except Exception as e:
             pass
 
         return list(affiliations), list(countries)
+
+    def _extract_country_from_affiliation(self, affiliation_data: Dict) -> str:
+        """Extracts country from Crossref affiliation data"""
+        try:
+            if 'country' in affiliation_data and affiliation_data['country']:
+                return affiliation_data['country'].upper().strip()
+
+            if 'address' in affiliation_data and affiliation_data['address']:
+                address = affiliation_data['address'].upper()
+                country_codes = ['USA', 'US', 'UK', 'GB', 'DE', 'FR', 'CN', 'JP', 'RU', 'IN', 'BR', 'CA', 'AU', 'KR']
+                for code in country_codes:
+                    if code in address:
+                        return code
+
+            if 'name' in affiliation_data and affiliation_data['name']:
+                name = affiliation_data['name'].upper()
+                country_keywords = {
+                    'UNITED STATES': 'US', 'USA': 'US', 'U.S.A': 'US', 'U.S.': 'US',
+                    'UNITED KINGDOM': 'UK', 'UK': 'UK', 'GREAT BRITAIN': 'UK',
+                    'GERMANY': 'DE', 'FRANCE': 'FR', 'CHINA': 'CN', 'JAPAN': 'JP',
+                    'RUSSIA': 'RU', 'INDIA': 'IN', 'BRAZIL': 'BR', 'CANADA': 'CA',
+                    'AUSTRALIA': 'AU', 'KOREA': 'KR', 'SOUTH KOREA': 'KR'
+                }
+                for keyword, code in country_keywords.items():
+                    if keyword in name:
+                        return code
+
+        except Exception as e:
+            pass
+
+        return ""
 
     def _extract_country_from_affiliation(self, affiliation_data: Dict) -> str:
         """Extracts country from Crossref affiliation data"""
@@ -896,21 +1053,24 @@ class CitationAnalyzer:
             }
 
     def get_enhanced_affiliations_and_countries(self, openalex_data: Dict, crossref_data: Dict) -> Tuple[List[str], str]:
-        """Enhanced affiliation processing with improved logic"""
+        """Enhanced affiliation processing with intelligent organization extraction"""
         try:
             openalex_affiliations, openalex_countries = self.affiliation_extractor.extract_affiliations_and_countries_from_openalex(openalex_data)
             crossref_affiliations, crossref_countries = self.affiliation_extractor.extract_affiliations_and_countries_from_crossref(crossref_data)
 
-            # Use original affiliations without extraction for better accuracy
+            # Combine and deduplicate affiliations (already processed by the extractor)
             all_affiliations = []
             if openalex_affiliations and openalex_affiliations != ['Unknown']:
                 all_affiliations.extend(openalex_affiliations)
             if crossref_affiliations:
                 all_affiliations.extend(crossref_affiliations)
 
-            # For display, use original affiliation names
-            final_affiliations = list(set(all_affiliations)) if all_affiliations else ['Unknown']
+            # Remove duplicates and "Unknown" values
+            final_affiliations = list(set([aff for aff in all_affiliations if aff != "Unknown"]))
+            if not final_affiliations:
+                final_affiliations = ['Unknown']
 
+            # Combine countries
             all_countries = set()
             if openalex_countries and openalex_countries != 'Unknown':
                 countries_list = openalex_countries.split(';')
@@ -3273,4 +3433,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
