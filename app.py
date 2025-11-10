@@ -267,356 +267,40 @@ class AuthorExtractor:
         initial = parts[0][0].upper() if parts[0] else ''
         return f"{surname} {initial}." if initial else surname
 
-# ====== AFFILIATION EXTRACTION ======
-class AffiliationExtractor:
-    """Extract affiliations and countries from Crossref and OpenAlex data with intelligent organization extraction"""
-    
-    def __init__(self):
-        self.organization_keywords = {
-            'university', 'college', 'institute', 'school', 'faculty', 'academy',
-            'universität', 'universitat', 'université', 'universite', 'polytechnic',
-            'center', 'centre', 'laboratory', 'department', 'division', 'group'
-        }
-        self.higher_education_keywords = {
-            'university', 'institute'
-        }
-        self.location_indicators = {
-            'street', 'avenue', 'boulevard', 'road', 'lane', 'drive', 'st.', 'ave.', 'blvd.', 'rd.',
-            'box', 'p.o.', 'p.o. box', 'post office', 'postal', 'zip', 'postcode', 'post code',
-            'city', 'town', 'village', 'district', 'region', 'province', 'state', 'county',
-            'russia', 'china', 'usa', 'germany', 'france', 'uk', 'japan', 'korea', 'india', 'brazil',
-            'moscow', 'beijing', 'london', 'tokyo', 'berlin', 'paris', 'yekaterinburg', 'guangzhou',
-            'russian federation', 'united states', 'united kingdom', 'south korea'
-        }
-        
-    def extract_main_organization(self, affiliation_text: str) -> str:
-        """Extract main organization from full affiliation text with hierarchy and comma structure"""
-        if not affiliation_text or affiliation_text in ['Unknown', 'Error', '']:
-            return "Unknown"
-    
-        # Clean the affiliation text but preserve commas for structure analysis
-        clean_text = affiliation_text.strip()
-    
-        # Remove email addresses
-        clean_text = re.sub(r'\S+@\S+', '', clean_text)
-    
-        # Remove postal codes and addresses but keep commas for organizational structure
-        clean_text = re.sub(r'\d{5,}(?:-\d{4})?', '', clean_text)
-        clean_text = re.sub(r'p\.?o\.? box \d+', '', clean_text, flags=re.IGNORECASE)
-        clean_text = re.sub(r'\b\d+\s+[a-zA-Z]+\s+[a-zA-Z]+\b', '', clean_text)
-    
-        # Split by common separators - preserve the order
-        parts = [part.strip() for part in re.split(r'[,;]', clean_text) if part.strip()]
-    
-        # Define organization hierarchy (lower number = higher level)
-        hierarchy_levels = {
-            'university': 1,
-            'academy': 1,
-            'institute': 2,
-            'college': 3,
-            'school': 3,
-            'faculty': 3,
-            'department': 3,
-            'division': 4,
-            'laboratory': 5,
-            'lab': 5,
-            'center': 4,
-            'centre': 4,
-            'group': 5
-        }
-    
-        # Remove Russian Academy of Sciences branches and similar patterns
-        patterns_to_remove = [
-            r'\bof the \w+ Branch of the Russian Academy of Sciences\b',
-            r'\bof the \w+ Branch of RAS\b',
-            r'\bRussian Academy of Sciences\b',
-            r'\bUral Branch.*Russian Academy\b',
-            r'\bRAS\b'
-        ]
-    
-        cleaned_parts = []
-        for part in parts:
-            clean_part = part
-            for pattern in patterns_to_remove:
-                clean_part = re.sub(pattern, '', clean_part, flags=re.IGNORECASE)
-            clean_part = clean_part.strip()
-            if clean_part and len(clean_part) > 3:
-                cleaned_parts.append(clean_part)
-    
-        if not cleaned_parts:
-            return "Unknown"
-    
-        # Analyze hierarchy in the cleaned parts
-        best_org = None
-        best_level = float('inf')
-    
-        for part in cleaned_parts:
-            part_lower = part.lower()
-        
-            # Skip parts that are clearly locations
-            is_location = any(location in part_lower for location in self.location_indicators)
-            if is_location:
-                continue
-        
-            # Check organization level
-            current_level = float('inf')
-            for org_keyword, level in hierarchy_levels.items():
-                if org_keyword in part_lower:
-                    current_level = min(current_level, level)
-                    break
-        
-            # If no organization keyword found, skip
-            if current_level == float('inf'):
-                continue
-        
-            # Apply hierarchy logic
-            if current_level < best_level:
-                best_level = current_level
-                best_org = part
-            elif current_level == best_level:
-                # If same level, prefer the one that appears later (usually the main org comes after departments)
-                # But only if it doesn't contain the previous one (avoid sub-departments)
-                if best_org and best_org.lower() not in part_lower:
-                    best_org = part
-    
-        # If we found a high-level organization, return it
-        if best_org and best_level <= 2:  # University or Institute level
-            return self.clean_organization_name(best_org)
-    
-        # Fallback: look for any university or institute in any part
-        for part in cleaned_parts:
-            part_lower = part.lower()
-            if any(keyword in part_lower for keyword in ['university', 'college', 'institute', 'academy']):
-                # Remove department prefixes if present
-                clean_org = self.remove_department_prefix(part)
-                return self.clean_organization_name(clean_org)
-    
-        # Last resort: use the first non-location part
-        for part in cleaned_parts:
-            part_lower = part.lower()
-            if not any(location in part_lower for location in self.location_indicators):
-                clean_org = self.remove_department_prefix(part)
-                return self.clean_organization_name(clean_org)
-    
-        # Final fallback
-        return self.clean_organization_name(cleaned_parts[0] if cleaned_parts else clean_text)
-
-    def clean_organization_name(self, org_name: str) -> str:
-        """Clean and normalize organization name without removing organizational units"""
-        if not org_name or org_name == "Unknown":
-            return "Unknown"
-        
-        # Remove only business suffixes, not organizational units
-        patterns_to_remove = [
-            r'^the\s+', r'\s+the$',
-            r'\binc\.?$', r'\bltd\.?$', r'\bcorp\.?$', r'\bco\.?$',
-            r'\bllc\.?$', r'\bgmbh\.?$'
-        ]
-    
-        cleaned = org_name.strip()
-        for pattern in patterns_to_remove:
-            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
-    
-        # Remove location information but preserve organizational structure
-        location_patterns = [
-            r',\s*[A-Za-z\s]+\s*\d{5,}.*$',  # City with postal code
-            r',\s*\d{5,}.*$',  # Postal code
-            r',\s*[A-Za-z]+\s*[A-Za-z]+\s*\d+.*$',  # Street addresses
-        ]
-    
-        for pattern in location_patterns:
-            cleaned = re.sub(pattern, '', cleaned)
-    
-        # Clean up extra spaces and punctuation
-        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-        cleaned = re.sub(r'^[,\s]+|[,\s]+$', '', cleaned)
-    
-        return cleaned if cleaned else "Unknown"
-
-    def extract_affiliations_and_countries_from_openalex(self, openalex_data: Dict) -> Tuple[List[str], str]:
-        """Extracts affiliations and countries from OpenAlex data with intelligent organization extraction"""
+    def extract_affiliations_and_countries(openalex_data):
+        """Простая функция извлечения аффилиаций и стран из OpenAlex данных"""
         affiliations = set()
         countries = set()
         authors_list = []
     
         if not openalex_data:
-            return ['Unknown'], 'Unknown'
+            return authors_list, list(affiliations), list(countries)
     
-        # Check for 'authorships' key
+        # Проверяем наличие ключа 'authorships'
         if 'authorships' not in openalex_data:
-            return ['Unknown'], 'Unknown'
+            return authors_list, list(affiliations), list(countries)
     
         try:
             for auth in openalex_data['authorships']:
                 author_name = auth.get('author', {}).get('display_name', 'Unknown')
                 authors_list.append(author_name)
             
-                # Check for 'institutions' key
+                # Проверяем наличие ключа 'institutions'
                 if 'institutions' in auth:
                     for inst in auth.get('institutions', []):
                         inst_name = inst.get('display_name')
                         country_code = inst.get('country_code')
                     
                         if inst_name:
-                            # Extract main organization from full institution name
-                            main_org = self.extract_main_organization(inst_name)
-                            if main_org and main_org != "Unknown":
-                                affiliations.add(main_org)
+                            affiliations.add(inst_name)
                         if country_code:
                             countries.add(country_code.upper())
-                        
-            # Convert to lists and format
-            affiliations_list = list(affiliations) if affiliations else ['Unknown']
-            countries_str = ';'.join(sorted(countries)) if countries else 'Unknown'
-        
-            return affiliations_list, countries_str
-        
         except (KeyError, TypeError, AttributeError) as e:
-            return ['Unknown'], 'Unknown'
-
-    def extract_affiliations_and_countries_from_crossref(self, crossref_data: Dict) -> Tuple[List[str], List[str]]:
-        """Extracts affiliations and countries from Crossref data with intelligent organization extraction"""
-        affiliations = set()
-        countries = set()
-
-        try:
-            if 'author' in crossref_data:
-                for author in crossref_data['author']:
-                    if 'affiliation' in author:
-                        for affil in author['affiliation']:
-                            if 'name' in affil:
-                                affiliation_name = affil['name'].strip()
-                                if affiliation_name and affiliation_name not in ['', 'None']:
-                                    # Extract main organization from full affiliation
-                                    main_org = self.extract_main_organization(affiliation_name)
-                                    if main_org and main_org != "Unknown":
-                                        affiliations.add(main_org)
-
-                            country = self._extract_country_from_affiliation(affil)
-                            if country:
-                                countries.add(country)
-
-            # Also check other fields for affiliations
-            for field in ['institution', 'organization', 'department']:
-                if field in crossref_data:
-                    if isinstance(crossref_data[field], list):
-                        for item in crossref_data[field]:
-                            if isinstance(item, dict) and 'name' in item:
-                                affiliation_name = item['name'].strip()
-                                if affiliation_name:
-                                    main_org = self.extract_main_organization(affiliation_name)
-                                    if main_org and main_org != "Unknown":
-                                        affiliations.add(main_org)
-                            elif isinstance(item, str):
-                                affiliation_name = item.strip()
-                                if affiliation_name:
-                                    main_org = self.extract_main_organization(affiliation_name)
-                                    if main_org and main_org != "Unknown":
-                                        affiliations.add(main_org)
-                    elif isinstance(crossref_data[field], str):
-                        affiliation_name = crossref_data[field].strip()
-                        if affiliation_name:
-                            main_org = self.extract_main_organization(affiliation_name)
-                            if main_org and main_org != "Unknown":
-                                affiliations.add(main_org)
-
-        except Exception as e:
+            # Логируем ошибку, но продолжаем выполнение
+            print(f"Warning in extract_affiliations_and_countries: {e}")
             pass
-
-        return list(affiliations), list(countries)
-
-    def remove_department_prefix(self, org_name: str) -> str:
-        """Remove department/school prefixes to get the main organization"""
-        if not org_name:
-            return org_name
     
-        # Patterns to remove (department/school prefixes)
-        department_patterns = [
-            r'^School of \w+(?:\s+\w+)*,\s*',
-            r'^Department of \w+(?:\s+\w+)*,\s*', 
-            r'^Institute of \w+(?:\s+\w+)*,\s*',
-            r'^Faculty of \w+(?:\s+\w+)*,\s*',
-            r'^College of \w+(?:\s+\w+)*,\s*',
-            r'^Laboratory of \w+(?:\s+\w+)*,\s*',
-            r'^Center for \w+(?:\s+\w+)*,\s*',
-            r'^Centre for \w+(?:\s+\w+)*,\s*',
-        ]
-    
-        cleaned = org_name.strip()
-    
-        # Try to remove department prefixes
-        for pattern in department_patterns:
-            match = re.search(pattern, cleaned, re.IGNORECASE)
-            if match:
-                # Get the part after the comma (main organization)
-                remaining = cleaned[match.end():].strip()
-                if remaining and any(keyword in remaining.lower() for keyword in ['university', 'college', 'institute']):
-                    return remaining
-    
-        # If no pattern matched or no main organization found, return original
-        return cleaned
-
-    def _extract_country_from_affiliation(self, affiliation_data: Dict) -> str:
-        """Extracts country from Crossref affiliation data"""
-        try:
-            if 'country' in affiliation_data and affiliation_data['country']:
-                return affiliation_data['country'].upper().strip()
-
-            if 'address' in affiliation_data and affiliation_data['address']:
-                address = affiliation_data['address'].upper()
-                country_codes = ['USA', 'US', 'UK', 'GB', 'DE', 'FR', 'CN', 'JP', 'RU', 'IN', 'BR', 'CA', 'AU', 'KR']
-                for code in country_codes:
-                    if code in address:
-                        return code
-
-            if 'name' in affiliation_data and affiliation_data['name']:
-                name = affiliation_data['name'].upper()
-                country_keywords = {
-                    'UNITED STATES': 'US', 'USA': 'US', 'U.S.A': 'US', 'U.S.': 'US',
-                    'UNITED KINGDOM': 'UK', 'UK': 'UK', 'GREAT BRITAIN': 'UK',
-                    'GERMANY': 'DE', 'FRANCE': 'FR', 'CHINA': 'CN', 'JAPAN': 'JP',
-                    'RUSSIA': 'RU', 'INDIA': 'IN', 'BRAZIL': 'BR', 'CANADA': 'CA',
-                    'AUSTRALIA': 'AU', 'KOREA': 'KR', 'SOUTH KOREA': 'KR'
-                }
-                for keyword, code in country_keywords.items():
-                    if keyword in name:
-                        return code
-
-        except Exception as e:
-            pass
-
-        return ""
-
-    def _extract_country_from_affiliation(self, affiliation_data: Dict) -> str:
-        """Extracts country from Crossref affiliation data"""
-        try:
-            if 'country' in affiliation_data and affiliation_data['country']:
-                return affiliation_data['country'].upper().strip()
-
-            if 'address' in affiliation_data and affiliation_data['address']:
-                address = affiliation_data['address'].upper()
-                country_codes = ['USA', 'US', 'UK', 'GB', 'DE', 'FR', 'CN', 'JP', 'RU', 'IN', 'BR', 'CA', 'AU', 'KR']
-                for code in country_codes:
-                    if code in address:
-                        return code
-
-            if 'name' in affiliation_data and affiliation_data['name']:
-                name = affiliation_data['name'].upper()
-                country_keywords = {
-                    'UNITED STATES': 'US', 'USA': 'US', 'U.S.A': 'US', 'U.S.': 'US',
-                    'UNITED KINGDOM': 'UK', 'UK': 'UK', 'GREAT BRITAIN': 'UK',
-                    'GERMANY': 'DE', 'FRANCE': 'FR', 'CHINA': 'CN', 'JAPAN': 'JP',
-                    'RUSSIA': 'RU', 'INDIA': 'IN', 'BRAZIL': 'BR', 'CANADA': 'CA',
-                    'AUSTRALIA': 'AU', 'KOREA': 'KR', 'SOUTH KOREA': 'KR'
-                }
-                for keyword, code in country_keywords.items():
-                    if keyword in name:
-                        return code
-
-        except Exception as e:
-            pass
-
-        return ""
+        return authors_list, list(affiliations), list(countries)
 
 class AltmetricProcessor:
     """Processor for Altmetric data"""
@@ -689,6 +373,42 @@ class AltmetricProcessor:
 
 # ====== MAIN CITATION ANALYZER ======
 class CitationAnalyzer:
+    
+    def extract_affiliations_and_countries(self, openalex_data):
+        """Простая функция извлечения аффилиаций и стран из OpenAlex данных"""
+        affiliations = set()
+        countries = set()
+        authors_list = []
+    
+        if not openalex_data:
+            return authors_list, list(affiliations), list(countries)
+    
+        # Проверяем наличие ключа 'authorships'
+        if 'authorships' not in openalex_data:
+            return authors_list, list(affiliations), list(countries)
+    
+        try:
+            for auth in openalex_data['authorships']:
+                author_name = auth.get('author', {}).get('display_name', 'Unknown')
+                authors_list.append(author_name)
+            
+                # Проверяем наличие ключа 'institutions'
+                if 'institutions' in auth:
+                    for inst in auth.get('institutions', []):
+                        inst_name = inst.get('display_name')
+                        country_code = inst.get('country_code')
+                    
+                        if inst_name:
+                            affiliations.add(inst_name)
+                        if country_code:
+                            countries.add(country_code.upper())
+        except (KeyError, TypeError, AttributeError) as e:
+            # Логируем ошибку, но продолжаем выполнение
+            print(f"Warning in extract_affiliations_and_countries: {e}")
+            pass
+    
+        return authors_list, list(affiliations), list(countries)
+    
     def __init__(self, rate_limit_calls=10, rate_limit_period=1):
         # Persistent caching
         self.persistent_cache = PersistentCache(ttl_hours=1)
@@ -710,7 +430,6 @@ class CitationAnalyzer:
         
         # Initialize processors
         self.author_extractor = AuthorExtractor()
-        self.affiliation_extractor = AffiliationExtractor()
         self.altmetric_processor = AltmetricProcessor()
         
         self.scientific_stopwords = {
@@ -913,8 +632,9 @@ class CitationAnalyzer:
                                         Exception)))
     @sleep_and_retry
     @limits(calls=15, period=1)
+            
     def get_crossref_data(self, doi: str) -> Dict:
-        """Gets data from Crossref with retries and improved affiliation processing"""
+        """Gets data from Crossref with retries and simplified affiliation processing"""
         if doi in self.crossref_cache:
             return self.crossref_cache[doi]
         try:
@@ -931,10 +651,22 @@ class CitationAnalyzer:
                     break
             data['publication_year'] = year if year else 'Unknown'
 
-            # Use the new affiliation extractor
-            affiliations, countries = self.affiliation_extractor.extract_affiliations_and_countries_from_crossref(data)
-            data['extracted_affiliations'] = affiliations
-            data['extracted_countries'] = countries
+            # Упрощенная обработка аффилиаций из Crossref
+            affiliations = []
+            countries = set()
+            if 'author' in data:
+                for author in data['author']:
+                    if 'affiliation' in author:
+                        for affil in author['affiliation']:
+                            if 'name' in affil:
+                                affiliation_name = affil['name'].strip()
+                                if affiliation_name and affiliation_name not in ['', 'None']:
+                                    affiliations.append(affiliation_name)
+                            if 'country' in affil and affil['country']:
+                                countries.add(affil['country'].upper().strip())
+
+            data['extracted_affiliations'] = list(set(affiliations)) if affiliations else []
+            data['extracted_countries'] = list(countries) if countries else []
 
             self.crossref_cache[doi] = data
             self._save_caches()
@@ -1128,37 +860,51 @@ class CitationAnalyzer:
             }
 
     def get_enhanced_affiliations_and_countries(self, openalex_data: Dict, crossref_data: Dict) -> Tuple[List[str], str]:
-        """Enhanced affiliation processing with intelligent organization extraction"""
+        """Упрощенная обработка аффилиаций и стран"""
         try:
-            openalex_affiliations, openalex_countries = self.affiliation_extractor.extract_affiliations_and_countries_from_openalex(openalex_data)
-            crossref_affiliations, crossref_countries = self.affiliation_extractor.extract_affiliations_and_countries_from_crossref(crossref_data)
+            # Используем простую функцию извлечения из OpenAlex
+            authors_list, openalex_affiliations, openalex_countries = extract_affiliations_and_countries(openalex_data)
+        
+            # Для Crossref используем простой подход
+            crossref_affiliations = []
+            crossref_countries = set()
+        
+            if crossref_data and 'author' in crossref_data:
+                for author in crossref_data['author']:
+                    if 'affiliation' in author:
+                        for affil in author['affiliation']:
+                            if 'name' in affil:
+                                affiliation_name = affil['name'].strip()
+                               if affiliation_name and affiliation_name not in ['', 'None', 'Unknown']:
+                                    crossref_affiliations.append(affiliation_name)
+                        
+                            # Простая логика для стран из Crossref
+                            if 'country' in affil and affil['country']:
+                                crossref_countries.add(affil['country'].upper().strip())
 
-            # Combine and deduplicate affiliations (already processed by the extractor)
+            # Объединяем аффилиации
             all_affiliations = []
-            if openalex_affiliations and openalex_affiliations != ['Unknown']:
+            if openalex_affiliations:
                 all_affiliations.extend(openalex_affiliations)
             if crossref_affiliations:
                 all_affiliations.extend(crossref_affiliations)
+        
+            # Удаляем дубликаты
+            final_affiliations = list(set(all_affiliations)) if all_affiliations else ['Unknown']
 
-            # Remove duplicates and "Unknown" values
-            final_affiliations = list(set([aff for aff in all_affiliations if aff != "Unknown"]))
-            if not final_affiliations:
-                final_affiliations = ['Unknown']
-
-            # Combine countries
+            # Объединяем страны
             all_countries = set()
-            if openalex_countries and openalex_countries != 'Unknown':
-                countries_list = openalex_countries.split(';')
-                all_countries.update([c.strip() for c in countries_list if c.strip()])
+            if openalex_countries:
+                all_countries.update(openalex_countries)
             if crossref_countries:
                 all_countries.update(crossref_countries)
-
+        
             final_countries = ';'.join(sorted(all_countries)) if all_countries else 'Unknown'
 
             return final_affiliations, final_countries
 
         except Exception as e:
-            self.logger.error(f"Error in enhanced affiliations processing: {e}")
+            self.logger.error(f"Error in affiliations processing: {e}")
             return ['Unknown'], 'Unknown'
 
     def get_citation_data(self, doi: str) -> tuple:
@@ -3508,6 +3254,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
