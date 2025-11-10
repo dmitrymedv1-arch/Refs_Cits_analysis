@@ -17,85 +17,26 @@ import csv
 import base64
 import logging
 from functools import lru_cache
-from contextlib import contextmanager
-
-from habanero import Crossref
-from crossref_commons.retrieval import get_publication_as_json
-from tqdm import tqdm
-from ratelimit import limits, sleep_and_retry
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from openpyxl import Workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
 from bs4 import BeautifulSoup
 import nltk
 from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer
-from openpyxl import Workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
+from habanero import Crossref
+from crossref_commons.retrieval import get_publication_as_json
+from ratelimit import limits, sleep_and_retry
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+import tqdm
 
-# Download nltk data if needed
+# Ensure NLTK data is available
 try:
     nltk.data.find('corpora/stopwords')
 except LookupError:
     nltk.download('stopwords')
 
-# Configure page
-st.set_page_config(
-    page_title="DOI Citation Analyzer",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Custom CSS for better styling
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .section-header {
-        font-size: 1.5rem;
-        color: #1f77b4;
-        margin-top: 2rem;
-        margin-bottom: 1rem;
-    }
-    .progress-container {
-        margin: 1rem 0;
-        padding: 1rem;
-        background-color: #f0f2f6;
-        border-radius: 10px;
-    }
-    .stats-box {
-        background-color: #e8f4fd;
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 0.5rem 0;
-    }
-</style>
-""", unsafe_allow_html=True)
-
 # =============================================
-# CACHE CONFIGURATION
-# =============================================
-
-@st.cache_resource
-def setup_analyzer():
-    """Initialize and cache the analyzer to maintain state across reruns"""
-    return CitationAnalyzer()
-
-@st.cache_data(ttl=3600)
-def cache_doi_processing(_analyzer, doi_list, analysis_type):
-    """Cache DOI processing results"""
-    return _analyzer.process_doi_sequential(doi_list)
-
-@st.cache_data(ttl=3600)
-def cache_citing_processing(_analyzer, doi_list):
-    """Cache citing articles processing results"""
-    return _analyzer.process_citing_articles_sequential(doi_list)
-
-# =============================================
-# CONFIGURATION CLASSES
+# CONFIGURATION AND SETUP
 # =============================================
 
 class Config:
@@ -103,6 +44,51 @@ class Config:
     MAX_RETRIES = 5
     DELAY_BETWEEN_REQUESTS = 0.3
     RETRY_DELAY = 1
+
+# =============================================
+# CACHE MANAGEMENT
+# =============================================
+
+class CacheManager:
+    def __init__(self):
+        self.cache_dir = tempfile.mkdtemp()
+        self.cache_files = {}
+    
+    def save_cache(self, key, data):
+        cache_file = os.path.join(self.cache_dir, f"{key}.pkl")
+        try:
+            import pickle
+            with open(cache_file, 'wb') as f:
+                pickle.dump(data, f)
+            self.cache_files[key] = cache_file
+        except Exception as e:
+            st.warning(f"Could not save cache for {key}: {e}")
+    
+    def load_cache(self, key):
+        cache_file = os.path.join(self.cache_dir, f"{key}.pkl")
+        if os.path.exists(cache_file):
+            try:
+                import pickle
+                with open(cache_file, 'rb') as f:
+                    return pickle.load(f)
+            except Exception as e:
+                st.warning(f"Could not load cache for {key}: {e}")
+        return None
+    
+    def clear_cache(self):
+        try:
+            shutil.rmtree(self.cache_dir)
+            self.cache_dir = tempfile.mkdtemp()
+            self.cache_files = {}
+        except Exception as e:
+            st.warning(f"Could not clear cache: {e}")
+
+# Initialize cache manager
+cache_manager = CacheManager()
+
+# =============================================
+# PERFORMANCE MONITORING
+# =============================================
 
 class PerformanceMonitor:
     def __init__(self):
@@ -127,11 +113,11 @@ class PerformanceMonitor:
         return {}
 
 # =============================================
-# AFFILIATION PROCESSOR
+# AFFILIATION PROCESSOR (CORRECTED VERSION)
 # =============================================
 
 class FastAffiliationProcessor:
-    """Fast affiliation processor with organization grouping"""
+    """Fast affiliation processor with proper organization grouping"""
 
     def __init__(self):
         self.common_keywords = {
@@ -142,14 +128,27 @@ class FastAffiliationProcessor:
             'clinic', 'foundation', 'corporation', 'company', 'inc', 'ltd', 'corp'
         }
         self.organization_cache = {}
-        self.country_keywords = {
-            'usa', 'united states', 'us', 'u.s.', 'u.s.a.', 'america',
-            'uk', 'united kingdom', 'great britain', 'england', 'scotland', 'wales',
-            'germany', 'deutschland', 'france', 'french', 'italy', 'italian',
-            'spain', 'spanish', 'china', 'chinese', 'japan', 'japanese',
-            'russia', 'russian', 'india', 'indian', 'brazil', 'brazilian',
-            'canada', 'canadian', 'australia', 'australian', 'korea', 'korean'
+        
+        # Country mapping from the working code
+        self.COUNTRY_MAPPING = {
+            'CN': 'China', 'RU': 'Russia', 'IT': 'Italy', 'US': 'USA', 'GB': 'United Kingdom',
+            'DE': 'Germany', 'FR': 'France', 'JP': 'Japan', 'CA': 'Canada', 'AU': 'Australia',
+            'NL': 'Netherlands', 'ES': 'Spain', 'SE': 'Sweden', 'CH': 'Switzerland', 'KR': 'South Korea',
+            'IN': 'India', 'BR': 'Brazil', 'MX': 'Mexico', 'AR': 'Argentina', 'ZA': 'South Africa',
+            'PL': 'Poland', 'IL': 'Israel', 'SG': 'Singapore', 'NO': 'Norway', 'DK': 'Denmark',
+            'FI': 'Finland', 'BE': 'Belgium', 'AT': 'Austria', 'PT': 'Portugal', 'GR': 'Greece',
+            'TR': 'Turkey', 'SA': 'Saudi Arabia', 'AE': 'UAE', 'CL': 'Chile', 'CO': 'Colombia',
+            'NZ': 'New Zealand', 'IE': 'Ireland', 'CZ': 'Czech Republic', 'HU': 'Hungary', 'RO': 'Romania',
+            'UA': 'Ukraine', 'TH': 'Thailand', 'MY': 'Malaysia', 'ID': 'Indonesia', 'PH': 'Philippines',
+            'VN': 'Vietnam', 'EG': 'Egypt', 'MA': 'Morocco', 'KE': 'Kenya', 'NG': 'Nigeria',
         }
+
+    def get_country_display(self, code):
+        """Get country display name from code"""
+        if not code or code == 'Unknown':
+            return 'Unknown'
+        code = code.upper()
+        return self.COUNTRY_MAPPING.get(code, code)
 
     def extract_main_organization_fast(self, affiliation: str) -> str:
         """Fast extraction of main organization from full affiliation"""
@@ -169,7 +168,7 @@ class FastAffiliationProcessor:
         # Remove postal codes and addresses
         clean_affiliation = re.sub(r'\d{5,}(?:-\d{4})?', '', clean_affiliation)
         clean_affiliation = re.sub(r'p\.?o\.? box \d+', '', clean_affiliation, flags=re.IGNORECASE)
-        clean_affiliation = re.sub(r'\b\d+\s+[a-zA-Z]+\s+[a-zA-Z]+\b', '', clean_affiliation)  # addresses like "123 Main Street"
+        clean_affiliation = re.sub(r'\b\d+\s+[a-zA-Z]+\s+[a-zA-Z]+\b', '', clean_affiliation)
 
         # Split by commas, semicolons and other separators
         parts = re.split(r'[,;]', clean_affiliation)
@@ -187,10 +186,7 @@ class FastAffiliationProcessor:
             # Check if part contains organization keywords
             has_org_keyword = any(keyword in part_lower for keyword in self.common_keywords)
 
-            # Check if doesn't contain country (usually not main organization)
-            has_country = any(country in part_lower for country in self.country_keywords)
-
-            if has_org_keyword and not has_country:
+            if has_org_keyword:
                 main_org_candidates.append(part)
 
         # Choose best candidate
@@ -199,10 +195,10 @@ class FastAffiliationProcessor:
             main_org_candidates.sort(key=len, reverse=True)
             main_org = main_org_candidates[0]
         else:
-            # If not found by keywords, take first significant part
+            # If not found by keywords, take first meaningful part
             for part in parts:
                 part = part.strip()
-                if len(part) > 10 and not any(country in part.lower() for country in self.country_keywords):
+                if len(part) > 10:
                     main_org = part
                     break
             else:
@@ -280,7 +276,7 @@ class FastAffiliationProcessor:
             # Add all organizations for this group
             final_groups[key1].extend(normalized_map[key1])
 
-            # Look for similar groups to merge
+            # Find similar groups to merge
             for j, key2 in enumerate(normalized_keys[i+1:], i+1):
                 if self.are_organizations_similar(key1, key2):
                     if key2 in normalized_map:
@@ -360,6 +356,32 @@ class FastAffiliationProcessor:
 
         return frequency_count, group_representatives
 
+    def get_affiliations_from_openalex(self, doi: str) -> List[Tuple[str, str]]:
+        """Get affiliations from OpenAlex API (from working code)"""
+        url = f"https://api.openalex.org/works/doi:{doi}"
+        try:
+            response = requests.get(url, timeout=15)
+            if response.status_code != 200:
+                return []
+            
+            data = response.json()
+            unique_affs = set()
+
+            if 'authorships' in data:
+                for auth in data['authorships']:
+                    for inst in auth.get('institutions', []):
+                        name = inst.get('display_name')
+                        if not name:
+                            ror = inst.get('ror', '')
+                            name = ror.split('/')[-1] if '/' in ror else 'Unknown'
+                        country = inst.get('country_code', 'Unknown')
+                        unique_affs.add((name, country))
+            
+            return [(name, country) for name, country in unique_affs]
+        
+        except Exception as e:
+            return []
+
 # =============================================
 # ALT METRIC PROCESSOR
 # =============================================
@@ -432,30 +454,6 @@ class AltmetricProcessor:
             'cited_by_feeds_count': data.get('cited_by_feeds_count', 0),
             'cited_by_accounts_count': data.get('cited_by_accounts_count', 0)
         }
-
-# =============================================
-# COUNTRY MAPPING
-# =============================================
-
-COUNTRY_MAPPING = {
-    'CN': 'China', 'RU': 'Russia', 'IT': 'Italy', 'US': 'USA', 'GB': 'United Kingdom',
-    'DE': 'Germany', 'FR': 'France', 'JP': 'Japan', 'CA': 'Canada', 'AU': 'Australia',
-    'NL': 'Netherlands', 'ES': 'Spain', 'SE': 'Sweden', 'CH': 'Switzerland', 'KR': 'South Korea',
-    'IN': 'India', 'BR': 'Brazil', 'MX': 'Mexico', 'AR': 'Argentina', 'ZA': 'South Africa',
-    'PL': 'Poland', 'IL': 'Israel', 'SG': 'Singapore', 'NO': 'Norway', 'DK': 'Denmark',
-    'FI': 'Finland', 'BE': 'Belgium', 'AT': 'Austria', 'PT': 'Portugal', 'GR': 'Greece',
-    'TR': 'Turkey', 'SA': 'Saudi Arabia', 'AE': 'UAE', 'CL': 'Chile', 'CO': 'Colombia',
-    'NZ': 'New Zealand', 'IE': 'Ireland', 'CZ': 'Czech Republic', 'HU': 'Hungary', 'RO': 'Romania',
-    'UA': 'Ukraine', 'TH': 'Thailand', 'MY': 'Malaysia', 'ID': 'Indonesia', 'PH': 'Philippines',
-    'VN': 'Vietnam', 'EG': 'Egypt', 'MA': 'Morocco', 'KE': 'Kenya', 'NG': 'Nigeria',
-}
-
-def get_country_display(code):
-    if not code or code == 'Unknown':
-        return '(Unknown)'
-    code = code.upper()
-    name = COUNTRY_MAPPING.get(code, code)
-    return f'({code} - {name})'
 
 # =============================================
 # MAIN CITATION ANALYZER
@@ -617,7 +615,7 @@ class CitationAnalyzer:
     @sleep_and_retry
     @limits(calls=15, period=1)
     def get_openalex_data(self, doi: str) -> Dict:
-        """Gets data from OpenAlex with retries"""
+        """Gets data from OpenAlex with retry attempts"""
         if doi in self.openalex_cache:
             return self.openalex_cache[doi]
         try:
@@ -649,7 +647,7 @@ class CitationAnalyzer:
     @sleep_and_retry
     @limits(calls=15, period=1)
     def get_crossref_data(self, doi: str) -> Dict:
-        """Gets data from Crossref with retries and improved affiliation processing"""
+        """Gets data from Crossref with retry attempts and improved affiliation processing"""
         if doi in self.crossref_cache:
             return self.crossref_cache[doi]
         try:
@@ -666,7 +664,8 @@ class CitationAnalyzer:
                     break
             data['publication_year'] = year if year else 'Unknown'
 
-            affiliations, countries = self.extract_affiliations_from_crossref(data)
+            # Use the corrected affiliation extraction
+            affiliations, countries = self.extract_affiliations_from_openalex(doi)
             data['extracted_affiliations'] = affiliations
             data['extracted_countries'] = countries
 
@@ -677,83 +676,28 @@ class CitationAnalyzer:
             self.crossref_cache[doi] = {'publication_year': 'Unknown', 'extracted_affiliations': [], 'extracted_countries': []}
             return {'publication_year': 'Unknown', 'extracted_affiliations': [], 'extracted_countries': []}
 
-    def extract_affiliations_from_crossref(self, crossref_data: Dict) -> tuple[List[str], List[str]]:
-        """Extracts affiliations and countries from Crossref data"""
+    def extract_affiliations_from_openalex(self, doi: str) -> tuple[List[str], List[str]]:
+        """Extracts affiliations and countries from OpenAlex (corrected version)"""
         affiliations = set()
         countries = set()
 
         try:
-            if 'author' in crossref_data:
-                for author in crossref_data['author']:
-                    if 'affiliation' in author:
-                        for affil in author['affiliation']:
-                            # Extract main organization
-                            if 'name' in affil:
-                                affiliation_name = affil['name'].strip()
-                                if affiliation_name and affiliation_name not in ['', 'None']:
-                                    # Normalize affiliation
-                                    main_org = self.fast_affiliation_processor.extract_main_organization_fast(affiliation_name)
-                                    if main_org and main_org != "Unknown":
-                                        affiliations.add(main_org)
-
-                            # Extract country
-                            country = self.extract_country_from_affiliation(affil)
-                            if country:
-                                countries.add(country)
-
-            # Process institutional data
-            for field in ['institution', 'organization', 'department']:
-                if field in crossref_data:
-                    if isinstance(crossref_data[field], list):
-                        for item in crossref_data[field]:
-                            if isinstance(item, dict) and 'name' in item:
-                                main_org = self.fast_affiliation_processor.extract_main_organization_fast(item['name'].strip())
-                                if main_org and main_org != "Unknown":
-                                    affiliations.add(main_org)
-                            elif isinstance(item, str):
-                                main_org = self.fast_affiliation_processor.extract_main_organization_fast(item.strip())
-                                if main_org and main_org != "Unknown":
-                                    affiliations.add(main_org)
-                    elif isinstance(crossref_data[field], str):
-                        main_org = self.fast_affiliation_processor.extract_main_organization_fast(crossref_data[field].strip())
-                        if main_org and main_org != "Unknown":
-                            affiliations.add(main_org)
+            aff_data = self.fast_affiliation_processor.get_affiliations_from_openalex(doi)
+            for name, country_code in aff_data:
+                if name and name != 'Unknown':
+                    # Use the fast processor to extract main organization
+                    main_org = self.fast_affiliation_processor.extract_main_organization_fast(name)
+                    if main_org and main_org != "Unknown":
+                        affiliations.add(main_org)
+                
+                if country_code and country_code != 'Unknown':
+                    country_name = self.fast_affiliation_processor.get_country_display(country_code)
+                    countries.add(country_name)
 
         except Exception as e:
-            self.logger.debug(f"Error extracting affiliations from Crossref: {e}")
+            self.logger.debug(f"Error extracting affiliations from OpenAlex: {e}")
 
         return list(affiliations), list(countries)
-
-    def extract_country_from_affiliation(self, affiliation_data: Dict) -> str:
-        """Extracts country from Crossref affiliation data"""
-        try:
-            if 'country' in affiliation_data and affiliation_data['country']:
-                return affiliation_data['country'].upper().strip()
-
-            if 'address' in affiliation_data and affiliation_data['address']:
-                address = affiliation_data['address'].upper()
-                country_codes = ['USA', 'US', 'UK', 'GB', 'DE', 'FR', 'CN', 'JP', 'RU', 'IN', 'BR', 'CA', 'AU', 'KR']
-                for code in country_codes:
-                    if code in address:
-                        return code
-
-            if 'name' in affiliation_data and affiliation_data['name']:
-                name = affiliation_data['name'].upper()
-                country_keywords = {
-                    'UNITED STATES': 'US', 'USA': 'US', 'U.S.A': 'US', 'U.S.': 'US',
-                    'UNITED KINGDOM': 'UK', 'UK': 'UK', 'GREAT BRITAIN': 'UK',
-                    'GERMANY': 'DE', 'FRANCE': 'FR', 'CHINA': 'CN', 'JAPAN': 'JP',
-                    'RUSSIA': 'RU', 'INDIA': 'IN', 'BRAZIL': 'BR', 'CANADA': 'CA',
-                    'AUSTRALIA': 'AU', 'KOREA': 'KR', 'SOUTH KOREA': 'KR'
-                }
-                for keyword, code in country_keywords.items():
-                    if keyword in name:
-                        return code
-
-        except Exception as e:
-            self.logger.debug(f"Error extracting country from affiliation: {e}")
-
-        return ""
 
     @sleep_and_retry
     @limits(calls=10, period=1)
@@ -883,8 +827,8 @@ class CitationAnalyzer:
 
             _, crossref_citations, openalex_citations = self.get_citation_data(doi)
 
-            # Enhanced affiliation processing
-            affiliations, countries = self.get_enhanced_affiliations_and_countries(openalex_data, crossref_data)
+            # Improved affiliation processing using the corrected method
+            affiliations, countries = self.get_enhanced_affiliations_and_countries(openalex_data, crossref_data, doi)
 
             current_year = datetime.now().year
             years_since_pub = self.calculate_years_since_publication(publication_year, current_year)
@@ -938,11 +882,11 @@ class CitationAnalyzer:
                 'error': str(e)
             }
 
-    def get_enhanced_affiliations_and_countries(self, openalex_data: Dict, crossref_data: Dict) -> tuple[List[str], str]:
+    def get_enhanced_affiliations_and_countries(self, openalex_data: Dict, crossref_data: Dict, doi: str) -> tuple[List[str], str]:
         """Enhanced affiliation processing with grouping"""
         try:
-            # Get affiliations from both sources
-            openalex_affiliations, openalex_countries = self.get_affiliations_and_countries_from_openalex_data(openalex_data)
+            # Get affiliations from OpenAlex using the corrected method
+            openalex_affiliations, openalex_countries = self.get_affiliations_and_countries_from_openalex_data(openalex_data, doi)
             crossref_affiliations, crossref_countries = self.get_affiliations_and_countries_from_crossref_data(crossref_data)
 
             # Combine affiliations
@@ -976,12 +920,27 @@ class CitationAnalyzer:
             self.logger.error(f"Error in enhanced affiliations processing: {e}")
             return ['Unknown'], 'Unknown'
 
-    def get_affiliations_and_countries_from_openalex_data(self, openalex_data: Dict) -> tuple[List[str], str]:
-        """Extracts affiliations and countries from OpenAlex data"""
+    def get_affiliations_and_countries_from_openalex_data(self, openalex_data: Dict, doi: str) -> tuple[List[str], str]:
+        """Extracts affiliations and countries from OpenAlex data using corrected method"""
         try:
             if not openalex_data:
-                return ['Unknown'], 'Unknown'
-
+                # Fall back to direct OpenAlex API call
+                aff_data = self.fast_affiliation_processor.get_affiliations_from_openalex(doi)
+                affiliations = set()
+                countries = set()
+                
+                for name, country_code in aff_data:
+                    if name and name != 'Unknown':
+                        main_org = self.fast_affiliation_processor.extract_main_organization_fast(name)
+                        if main_org and main_org != "Unknown":
+                            affiliations.add(main_org)
+                    
+                    if country_code and country_code != 'Unknown':
+                        country_name = self.fast_affiliation_processor.get_country_display(country_code)
+                        countries.add(country_name)
+                
+                return list(affiliations) or ['Unknown'], ';'.join(sorted(countries)) if countries else 'Unknown'
+            
             affiliations = set()
             countries = set()
 
@@ -997,7 +956,8 @@ class CitationAnalyzer:
                             affiliations.add(main_org)
 
                     if country_code:
-                        countries.add(country_code.upper())
+                        country_name = self.fast_affiliation_processor.get_country_display(country_code)
+                        countries.add(country_name)
 
             return list(affiliations) or ['Unknown'], ';'.join(sorted(countries)) if countries else 'Unknown'
         except Exception as e:
@@ -1180,7 +1140,7 @@ class CitationAnalyzer:
         citing_articles_details = []
         all_citing_titles = []
 
-        # CHANGE: Collect all connections with source_doi preservation
+        # Collect all connections with source_doi preservation
         all_citing_connections = []
         for source_doi, source_data in citing_results.items():
             for citing_doi in source_data['citing_dois']:
@@ -1189,13 +1149,13 @@ class CitationAnalyzer:
                     'citing_doi': citing_doi
                 })
 
-        # CHANGE: Cache unique citing article data
+        # Cache unique citing article data
         all_citing_dois = set(conn['citing_doi'] for conn in all_citing_connections)
         citing_data_cache = {}
 
         progress_bar = st.progress(0)
         status_text = st.empty()
-
+        
         for i, citing_doi in enumerate(all_citing_dois):
             try:
                 status_text.text(f"Processing citing article {i+1}/{len(all_citing_dois)}: {citing_doi}")
@@ -1221,7 +1181,7 @@ class CitationAnalyzer:
         status_text.empty()
         progress_bar.empty()
 
-        # CHANGE: Create citing_articles_df with ALL connections
+        # Create citing_articles_df with ALL connections
         for connection in all_citing_connections:
             citing_doi = connection['citing_doi']
             source_doi = connection['source_doi']
@@ -1606,7 +1566,7 @@ class CitationAnalyzer:
             labels = [f"{s}-{s+4}" for s in period_starts]
 
             years_total = pd.to_numeric(citations_df['year'], errors='coerce')
-            years_total = years_total[years_total.notna() & years_total.between(1900, current_year)].ast(int)
+            years_total = years_total[years_total.notna() & years_total.between(1900, current_year)].astype(int)
             period_counts_total = pd.cut(years_total, bins=bins, labels=labels, right=False).astype(str)
             period_df_total = period_counts_total.value_counts().reset_index()
             period_df_total.columns = ['period', 'frequency_total']
@@ -1614,7 +1574,7 @@ class CitationAnalyzer:
             period_df_total['period'] = period_df_total['period'].astype(str)
 
             years_unique = pd.to_numeric(unique_df['year'], errors='coerce')
-            years_unique = years_unique[years_unique.notna() & years_unique.between(1900, current_year)].ast(int)
+            years_unique = years_unique[years_unique.notna() & years_unique.between(1900, current_year)].astype(int)
             period_counts_unique = pd.cut(years_unique, bins=bins, labels=labels, right=False).astype(str)
             period_df_unique = period_counts_unique.value_counts().reset_index()
             period_df_unique.columns = ['period', 'frequency_unique']
@@ -1817,13 +1777,12 @@ Altmetric metrics included for social media and online attention analysis
 
         all_references = []
         
-        # Progress tracking
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         for i, doi in enumerate(doi_list):
             try:
-                status_text.text(f"Collecting references for article {i+1}/{len(doi_list)}: {doi}")
+                status_text.text(f"Collecting references for DOI {i+1}/{len(doi_list)}: {doi}")
                 references = self.get_references_from_crossref(doi)
                 for j, ref in enumerate(references):
                     all_references.append({
@@ -1858,34 +1817,33 @@ Altmetric metrics included for social media and online attention analysis
 
         title_to_doi = {}
         
-        # Progress for title search
-        if titles_to_search:
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            for i, title in enumerate(list(titles_to_search)):
-                status_text.text(f"Searching DOI by title {i+1}/{len(titles_to_search)}")
-                doi = self.quick_doi_search(title)
-                if doi and self.validate_doi(doi):
-                    normalized_doi = self.normalize_doi(doi)
-                    title_to_doi[title] = normalized_doi
-                    unique_dois.add(normalized_doi)
-                time.sleep(Config.DELAY_BETWEEN_REQUESTS)
-                
-                # Update progress
-                progress_bar.progress((i + 1) / len(titles_to_search))
-            
-            status_text.empty()
-            progress_bar.empty()
-
-        # Progress for unique DOI processing
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        for i, doi in enumerate(list(unique_dois)):
+        titles_list = list(titles_to_search)
+        for i, title in enumerate(titles_list):
+            status_text.text(f"Searching DOIs by title {i+1}/{len(titles_list)}")
+            doi = self.quick_doi_search(title)
+            if doi and self.validate_doi(doi):
+                normalized_doi = self.normalize_doi(doi)
+                title_to_doi[title] = normalized_doi
+                unique_dois.add(normalized_doi)
+            time.sleep(Config.DELAY_BETWEEN_REQUESTS)
+            
+            # Update progress
+            progress_bar.progress((i + 1) / len(titles_list))
+
+        status_text.empty()
+        progress_bar.empty()
+
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        unique_dois_list = list(unique_dois)
+        for i, doi in enumerate(unique_dois_list):
+            status_text.text(f"Processing unique DOI {i+1}/{len(unique_dois_list)}: {doi}")
             if doi not in self.unique_ref_data_cache:
                 try:
-                    status_text.text(f"Processing unique DOI {i+1}/{len(unique_dois)}: {doi}")
                     article_data = self.get_combined_article_data(doi)
                     self.unique_ref_data_cache[doi] = {
                         'doi': doi,
@@ -1922,9 +1880,9 @@ Altmetric metrics included for social media and online attention analysis
                         'rss_blogs': 0, 'unique_accounts': 0
                     }
                 time.sleep(Config.DELAY_BETWEEN_REQUESTS)
-            
+                
             # Update progress
-            progress_bar.progress((i + 1) / len(unique_dois))
+            progress_bar.progress((i + 1) / len(unique_dois_list))
 
         status_text.empty()
         progress_bar.empty()
@@ -1932,7 +1890,6 @@ Altmetric metrics included for social media and online attention analysis
         results = []
         source_articles = []
 
-        # Progress for source articles processing
         progress_bar = st.progress(0)
         status_text = st.empty()
         
@@ -2111,9 +2068,10 @@ Altmetric metrics included for social media and online attention analysis
 
         progress_bar = st.progress(0)
         status_text = st.empty()
-
+        
         for index, row in enumerate(references_df.iterrows()):
-            i, row_data = index, row[1]
+            i, row_data = row
+            status_text.text(f"Enhancing data {i+1}/{len(references_df)}")
             doi = row_data['doi']
 
             needs_enhancement = (
@@ -2128,7 +2086,6 @@ Altmetric metrics included for social media and online attention analysis
             if needs_enhancement and doi and self.validate_doi(doi):
                 incomplete_count += 1
                 try:
-                    status_text.text(f"Enhancing data for incomplete reference {i+1}/{len(references_df)}")
                     enhanced_data = self.get_combined_article_data(doi)
                     enhanced_row = {
                         'source_doi': row_data['source_doi'],
@@ -2175,70 +2132,6 @@ Altmetric metrics included for social media and online attention analysis
         progress_bar.empty()
 
         return pd.DataFrame(enhanced_rows)
-
-    def reprocess_failed_references(self, failed_references_df: pd.DataFrame) -> pd.DataFrame:
-        """Reprocess failed references to find missing DOIs and data"""
-        if failed_references_df.empty:
-            return failed_references_df
-
-        updated_rows = []
-
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-
-        for index, row in enumerate(failed_references_df.iterrows()):
-            i, row_data = index, row[1]
-            original_doi = row_data.get('reference_doi') if 'reference_doi' in row_data else row_data.get('doi')
-            error_description = row_data.get('error_description', '') if 'error_description' in row_data else row_data.get('error', '')
-
-            title_match = re.search(r"title '([^']+)'|title ([^,]+)", str(error_description))
-            title = None
-            if title_match:
-                title = next((g for g in title_match.groups() if g), None)
-
-            if not title and 'title' in row_data:
-                title = row_data['title']
-
-            found_doi = None
-            if title and title != 'Unknown':
-                status_text.text(f"Reprocessing failed reference {i+1}/{len(failed_references_df)}")
-                found_doi = self.quick_doi_search(title)
-                time.sleep(Config.DELAY_BETWEEN_REQUESTS)
-
-            if found_doi and self.validate_doi(found_doi):
-                try:
-                    enhanced_data = self.get_combined_article_data(found_doi)
-                    enhanced_data.update({
-                        'source_doi': row_data.get('source_doi'),
-                        'position': row_data.get('position'),
-                        'error': None,
-                        'annual_citation_rate_crossref': self.safe_calculate_annual_citation_rate(
-                            enhanced_data['citation_count_crossref'], enhanced_data.get('publication_year')
-                        ),
-                        'annual_citation_rate_openalex': self.safe_calculate_annual_citation_rate(
-                            enhanced_data['citation_count_openalex'], enhanced_data.get('publication_year')
-                        )
-                    })
-                    updated_rows.append(enhanced_data)
-                    continue
-                except Exception as e:
-                    pass
-
-            updated_row = row_data.copy()
-            if 'updated_doi' not in updated_row:
-                updated_row['updated_doi'] = found_doi if found_doi else original_doi
-            if 'updated_error' not in updated_row:
-                updated_row['updated_error'] = f"DOI found: {found_doi}" if found_doi else f"No DOI found for title '{title}'" if title else "No title available"
-
-            updated_rows.append(updated_row)
-            
-            # Update progress
-            progress_bar.progress((i + 1) / len(failed_references_df))
-
-        status_text.empty()
-        progress_bar.empty()
-
-        return pd.DataFrame(updated_rows)
 
     def get_unique_references(self, references_df: pd.DataFrame) -> pd.DataFrame:
         if references_df.empty:
@@ -2485,12 +2378,12 @@ Altmetric metrics included for social media and online attention analysis
             unique_df = self.get_unique_references(references_df)
             total_unique = len(unique_df)
             years_total = pd.to_numeric(references_df['year'], errors='coerce')
-            years_total = years_total[years_total.notna() & years_total.between(1900, 2026)].astype(int)
+            years_total = years_total[years_total.notna() & years_total.between(1900, 2026)].ast(int)
             year_counts_total = years_total.value_counts().reset_index()
             year_counts_total.columns = ['year', 'frequency_total']
             year_counts_total['percentage_total'] = round(year_counts_total['frequency_total'] / total_refs * 100, 2)
             years_unique = pd.to_numeric(unique_df['year'], errors='coerce')
-            years_unique = years_unique[years_unique.notna() & years_unique.between(1900, 2026)].astype(int)
+            years_unique = years_unique[years_unique.notna() & years_unique.between(1900, 2026)].ast(int)
             year_counts_unique = years_unique.value_counts().reset_index()
             year_counts_unique.columns = ['year', 'frequency_unique']
             year_counts_unique['percentage_unique'] = round(year_counts_unique['frequency_unique'] / total_unique * 100, 2)
@@ -2514,14 +2407,14 @@ Altmetric metrics included for social media and online attention analysis
             bins = period_starts + [period_starts[-1] + 5]
             labels = [f"{s}-{s+4}" for s in period_starts]
             years_total = pd.to_numeric(references_df['year'], errors='coerce')
-            years_total = years_total[years_total.notna() & years_total.between(1900, current_year)].astype(int)
+            years_total = years_total[years_total.notna() & years_total.between(1900, current_year)].ast(int)
             period_counts_total = pd.cut(years_total, bins=bins, labels=labels, right=False).astype(str)
             period_df_total = period_counts_total.value_counts().reset_index()
             period_df_total.columns = ['period', 'frequency_total']
             period_df_total['percentage_total'] = round(period_df_total['frequency_total'] / total_refs * 100, 2)
             period_df_total['period'] = period_df_total['period'].astype(str)
             years_unique = pd.to_numeric(unique_df['year'], errors='coerce')
-            years_unique = years_unique[years_unique.notna() & years_unique.between(1900, current_year)].astype(int)
+            years_unique = years_unique[years_unique.notna() & years_unique.between(1900, current_year)].ast(int)
             period_counts_unique = pd.cut(years_unique, bins=bins, labels=labels, right=False).astype(str)
             period_df_unique = period_counts_unique.value_counts().reset_index()
             period_df_unique.columns = ['period', 'frequency_unique']
@@ -2807,273 +2700,202 @@ Altmetric metrics provide social media and online attention analysis
                 return "error_creating_references_report"
 
 # =============================================
-# STREAMLIT UI COMPONENTS
-# =============================================
-
-def display_analysis_results_streamlit(analyzer, combined_df: pd.DataFrame, source_articles_df: pd.DataFrame,
-                         doi_list: List[str], total_references: int, unique_dois: int,
-                         all_titles: List[str]) -> None:
-    """Displays analysis results in Streamlit"""
-    try:
-        st.markdown("## References Analysis Results")
-        st.markdown("---")
-
-        if combined_df.empty and source_articles_df.empty:
-            st.error("No data available - generating error report")
-            excel_name = analyzer.save_all_data_to_excel(combined_df, source_articles_df, doi_list, total_references, unique_dois, all_titles)
-            st.success(f"Error report archived and ready for download as: {excel_name}")
-            return
-
-        unique_df = analyzer.get_unique_references(combined_df)
-        successful_refs = len(combined_df[combined_df['error'].isna()])
-        stats = analyzer.performance_monitor.get_stats()
-
-        # Display summary statistics
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Total References Found", total_references)
-        with col2:
-            st.metric("Unique DOIs", unique_dois)
-        with col3:
-            st.metric("References Processed", len(combined_df))
-        with col4:
-            st.metric("Successful References", successful_refs)
-
-        # Display processing statistics
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Processing Time", f"{stats.get('elapsed_seconds', 0):.2f}s")
-        with col2:
-            st.metric("API Requests", stats.get('total_requests', 0))
-        with col3:
-            st.metric("Requests/Second", f"{stats.get('requests_per_second', 0):.2f}")
-
-        # Display references per article
-        st.subheader("References per Article")
-        ref_counts = []
-        for doi in doi_list:
-            ref_count = len(combined_df[combined_df['source_doi'] == doi]) if not combined_df.empty else 0
-            ref_counts.append({"DOI": doi, "References": ref_count})
-        ref_counts_df = pd.DataFrame(ref_counts)
-        st.dataframe(ref_counts_df, use_container_width=True)
-
-        # Display sample data
-        if not source_articles_df.empty:
-            st.subheader("Source Articles (Sample)")
-            display_cols = ['source_doi', 'title', 'authors_with_initials', 'year', 'journal_abbreviation', 'citation_count_openalex']
-            st.dataframe(source_articles_df[display_cols].head(10), use_container_width=True)
-
-        if not unique_df.empty:
-            st.subheader("Unique References (Sample)")
-            st.dataframe(unique_df[display_cols].head(10), use_container_width=True)
-
-        # Generate and provide download link
-        excel_path = analyzer.save_all_data_to_excel(combined_df, source_articles_df, doi_list, total_references, unique_dois, all_titles)
-        
-        with open(excel_path, "rb") as file:
-            btn = st.download_button(
-                label="Download Complete Analysis (Excel)",
-                data=file,
-                file_name=f"references_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-
-    except Exception as e:
-        st.error(f"Critical error in displaying results: {e}")
-        excel_name = analyzer.save_all_data_to_excel(combined_df, source_articles_df, doi_list, total_references, unique_dois, all_titles)
-        st.success(f"Error report generated and ready for download as: {excel_name}")
-
-def display_citing_analysis_results_streamlit(analyzer, citing_articles_df: pd.DataFrame, citing_details_df: pd.DataFrame,
-                                            doi_list: List[str], citing_results: Dict, all_citing_titles: List[str]) -> None:
-    """Displays citing articles analysis results in Streamlit"""
-    try:
-        st.markdown("## Citing Articles Analysis Results")
-        st.markdown("---")
-
-        if not citing_results:
-            st.warning("No citing articles found.")
-            return
-
-        total_citation_relationships = len(citing_articles_df) if citing_articles_df is not None else 0
-        total_unique_citations = len(analyzer.get_unique_citations(citing_articles_df)) if citing_articles_df is not None and not citing_articles_df.empty else 0
-
-        # Display summary statistics
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Source Articles", len(doi_list))
-        with col2:
-            st.metric("Citation Relationships", total_citation_relationships)
-        with col3:
-            st.metric("Unique Citing Articles", total_unique_citations)
-        with col4:
-            successful_citations = len(citing_articles_df[citing_articles_df['error'].isna()]) if citing_articles_df is not None else 0
-            st.metric("Successful Citations", successful_citations)
-
-        # Display citations per article
-        st.subheader("Citations per Source Article")
-        citation_counts = []
-        for doi, data in citing_results.items():
-            citation_counts.append({"DOI": doi, "Citations": data['count']})
-        citation_counts_df = pd.DataFrame(citation_counts)
-        st.dataframe(citation_counts_df, use_container_width=True)
-
-        # Display sample citing articles
-        if citing_articles_df is not None and not citing_articles_df.empty:
-            st.subheader("Citing Articles (Sample)")
-            display_cols = ['source_doi', 'title', 'authors_with_initials', 'year', 'journal_abbreviation', 'citation_count_openalex']
-            st.dataframe(citing_articles_df[display_cols].head(10), use_container_width=True)
-
-        # Generate and provide download link
-        excel_path = analyzer.save_citation_analysis_to_excel(citing_articles_df, citing_details_df, doi_list, citing_results, all_citing_titles)
-        
-        with open(excel_path, "rb") as file:
-            btn = st.download_button(
-                label="Download Citation Analysis (Excel)",
-                data=file,
-                file_name=f"citation_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-
-    except Exception as e:
-        st.error(f"Critical error in displaying citation results: {e}")
-        empty_df = pd.DataFrame()
-        excel_name = analyzer.save_citation_analysis_to_excel(empty_df, empty_df, doi_list, {}, [])
-        st.success(f"Error report generated and ready for download as: {excel_name}")
-
-# =============================================
-# MAIN STREAMLIT APP
+# STREAMLIT INTERFACE
 # =============================================
 
 def main():
-    st.markdown('<h1 class="main-header">📊 DOI Citation Analyzer</h1>', unsafe_allow_html=True)
+    st.set_page_config(
+        page_title="Citation Analyzer",
+        page_icon="📚",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
     
-    # Initialize analyzer with caching
-    analyzer = setup_analyzer()
+    st.title("📚 Advanced Citation Analyzer")
+    st.markdown("---")
     
-    # Create tabs
+    # Initialize analyzer with cache
+    if 'analyzer' not in st.session_state:
+        st.session_state.analyzer = CitationAnalyzer()
+    
+    # Cache management
+    if st.sidebar.button("Clear Cache"):
+        cache_manager.clear_cache()
+        st.session_state.analyzer = CitationAnalyzer()
+        st.sidebar.success("Cache cleared!")
+    
+    # Main tabs
     tab1, tab2 = st.tabs(["References Analysis", "Citing Articles Analysis"])
     
     with tab1:
-        st.markdown("### Analyze References")
-        st.markdown("Analyze the references cited by the input articles")
+        st.header("References Analysis")
+        st.write("Analyze the references cited by the input articles")
         
         doi_input_references = st.text_area(
             "Enter DOIs for references analysis",
             value="10.1038/s41586-023-06924-6",
             placeholder="Enter DOIs (e.g., 10.1010/XYZ, doi:10.1010/XYZ, https://doi.org/10.1010/XYZ, etc.) separated by any punctuation or newlines",
-            height=150,
-            help="You can enter multiple DOIs separated by commas, spaces, or newlines"
+            height=150
         )
         
-        if st.button("Analyze References", type="primary", key="analyze_refs"):
-            if doi_input_references.strip():
+        if st.button("Analyze References", type="primary"):
+            if doi_input_references:
                 with st.spinner("Parsing DOIs..."):
-                    doi_list = analyzer.parse_doi_input(doi_input_references)
+                    doi_list = st.session_state.analyzer.parse_doi_input(doi_input_references)
                 
                 if doi_list:
                     st.success(f"Found {len(doi_list)} valid DOI(s)")
                     
-                    # Create progress container
-                    progress_container = st.container()
+                    # Main progress bar
+                    main_progress = st.progress(0)
+                    status_text = st.empty()
                     
-                    with progress_container:
-                        st.markdown("### Processing Progress")
-                        overall_progress = st.progress(0)
-                        status_text = st.empty()
+                    try:
+                        status_text.text("Starting sequential processing for references analysis...")
+                        combined_references_df, source_articles_df, total_references, unique_dois, all_titles = st.session_state.analyzer.process_doi_sequential(doi_list)
                         
-                        # Process DOIs
-                        with st.spinner("Processing references..."):
-                            try:
-                                combined_references_df, source_articles_df, total_references, unique_dois, all_titles = cache_doi_processing(
-                                    analyzer, doi_list, "references"
-                                )
-                                
-                                # Display results
-                                display_analysis_results_streamlit(
-                                    analyzer, combined_references_df, source_articles_df, 
-                                    doi_list, total_references, unique_dois, all_titles
-                                )
-                                
-                            except Exception as e:
-                                st.error(f"Error during processing: {e}")
-                                empty_df = pd.DataFrame()
-                                analyzer.save_all_data_to_excel(empty_df, empty_df, doi_list, 0, 0, [])
-                                st.info("Error report has been generated")
+                        main_progress.progress(1.0)
+                        status_text.text("Analysis complete! Generating report...")
+                        
+                        # Display results
+                        st.subheader("Analysis Results")
+                        
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Total References", total_references)
+                        with col2:
+                            st.metric("Unique DOIs", unique_dois)
+                        with col3:
+                            st.metric("Processed References", len(combined_references_df) if not combined_references_df.empty else 0)
+                        
+                        # Show source articles
+                        if not source_articles_df.empty:
+                            st.subheader("Source Articles")
+                            st.dataframe(source_articles_df.head(10))
+                        
+                        # Show unique references
+                        unique_df = st.session_state.analyzer.get_unique_references(combined_references_df)
+                        if not unique_df.empty:
+                            st.subheader("Unique References (Sample)")
+                            st.dataframe(unique_df.head(10))
+                        
+                        # Generate and download Excel report
+                        excel_path = st.session_state.analyzer.save_all_data_to_excel(
+                            combined_references_df, source_articles_df, doi_list, 
+                            total_references, unique_dois, all_titles
+                        )
+                        
+                        if os.path.exists(excel_path):
+                            with open(excel_path, "rb") as f:
+                                excel_data = f.read()
+                            
+                            st.download_button(
+                                label="Download Complete Analysis Report",
+                                data=excel_data,
+                                file_name=os.path.basename(excel_path),
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                            
+                            # Clean up
+                            os.remove(excel_path)
+                        
+                        status_text.empty()
+                        
+                    except Exception as e:
+                        st.error(f"Error during processing: {e}")
+                        main_progress.empty()
+                        status_text.empty()
                 else:
                     st.error("No valid DOIs found. Please check your input.")
             else:
                 st.warning("Please enter at least one DOI")
     
     with tab2:
-        st.markdown("### Analyze Citing Articles")
-        st.markdown("Find articles that cite the input articles (forward citations)")
+        st.header("Citing Articles Analysis")
+        st.write("Find articles that cite the input articles (forward citations)")
         
         doi_input_citing = st.text_area(
             "Enter DOIs for citing articles analysis",
             value="10.1038/s41586-023-06924-6",
             placeholder="Enter DOIs (e.g., 10.1038/s41586-023-06924-6) separated by any punctuation or newlines",
-            height=150,
-            help="You can enter multiple DOIs separated by commas, spaces, or newlines"
+            height=150
         )
         
-        if st.button("Analyze Citing Articles", type="secondary", key="analyze_citing"):
-            if doi_input_citing.strip():
+        if st.button("Analyze Citing Articles", type="secondary"):
+            if doi_input_citing:
                 with st.spinner("Parsing DOIs..."):
-                    doi_list = analyzer.parse_doi_input(doi_input_citing)
+                    doi_list = st.session_state.analyzer.parse_doi_input(doi_input_citing)
                 
                 if doi_list:
                     st.success(f"Found {len(doi_list)} valid DOI(s)")
                     
-                    # Process citing articles
-                    with st.spinner("Processing citing articles..."):
-                        try:
-                            citing_articles_df, citing_details_df, citing_results, all_citing_titles = cache_citing_processing(
-                                analyzer, doi_list
+                    # Main progress bar
+                    main_progress = st.progress(0)
+                    status_text = st.empty()
+                    
+                    try:
+                        status_text.text("Starting sequential processing for citing articles analysis...")
+                        citing_articles_df, citing_details_df, citing_results, all_citing_titles = st.session_state.analyzer.process_citing_articles_sequential(doi_list)
+                        
+                        main_progress.progress(1.0)
+                        status_text.text("Analysis complete! Generating report...")
+                        
+                        # Display results
+                        st.subheader("Citing Articles Analysis Results")
+                        
+                        if citing_results:
+                            total_citation_relationships = len(citing_articles_df) if citing_articles_df is not None else 0
+                            total_unique_citations = len(st.session_state.analyzer.get_unique_citations(citing_articles_df)) if citing_articles_df is not None and not citing_articles_df.empty else 0
+                            
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Source Articles", len(doi_list))
+                            with col2:
+                                st.metric("Citation Relationships", total_citation_relationships)
+                            with col3:
+                                st.metric("Unique Citing Articles", total_unique_citations)
+                            
+                            st.subheader("Citations per Source Article")
+                            for doi, data in citing_results.items():
+                                st.write(f"- **{doi}**: {data['count']} citations")
+                            
+                            if citing_articles_df is not None and not citing_articles_df.empty:
+                                st.subheader("Citing Articles (Sample)")
+                                display_cols = ['source_doi', 'doi', 'title', 'authors_with_initials', 'author_count', 'year', 'journal_abbreviation',
+                                              'citation_count_openalex', 'altmetric_score', 'number_of_mentions']
+                                st.dataframe(citing_articles_df[display_cols].head(10))
+                            
+                            # Generate and download Excel report
+                            excel_path = st.session_state.analyzer.save_citation_analysis_to_excel(
+                                citing_articles_df, citing_details_df, doi_list, citing_results, all_citing_titles
                             )
                             
-                            # Display results
-                            display_citing_analysis_results_streamlit(
-                                analyzer, citing_articles_df, citing_details_df,
-                                doi_list, citing_results, all_citing_titles
-                            )
-                            
-                        except Exception as e:
-                            st.error(f"Error during processing: {e}")
-                            empty_df = pd.DataFrame()
-                            analyzer.save_citation_analysis_to_excel(empty_df, empty_df, doi_list, {}, [])
-                            st.info("Error report has been generated")
+                            if os.path.exists(excel_path):
+                                with open(excel_path, "rb") as f:
+                                    excel_data = f.read()
+                                
+                                st.download_button(
+                                    label="Download Citation Analysis Report",
+                                    data=excel_data,
+                                    file_name=os.path.basename(excel_path),
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                )
+                                
+                                # Clean up
+                                os.remove(excel_path)
+                        else:
+                            st.info("No citing articles found for the provided DOIs.")
+                        
+                        status_text.empty()
+                        
+                    except Exception as e:
+                        st.error(f"Error during processing: {e}")
+                        main_progress.empty()
+                        status_text.empty()
                 else:
                     st.error("No valid DOIs found. Please check your input.")
             else:
                 st.warning("Please enter at least one DOI")
-
-    # Sidebar with information
-    with st.sidebar:
-        st.markdown("### ℹ️ About")
-        st.markdown("""
-        This tool analyzes academic publications by DOI to:
-        
-        - **References Analysis**: Extract and analyze references cited by input articles
-        - **Citing Articles Analysis**: Find articles that cite the input articles
-        
-        **Features**:
-        - Affiliation and country analysis
-        - Author frequency statistics  
-        - Journal impact metrics
-        - Altmetric attention scores
-        - Year distribution analysis
-        - Duplicate detection
-        
-        **Data Sources**:
-        - Crossref
-        - OpenAlex
-        - Altmetric
-        """)
-        
-        st.markdown("### ⚙️ Configuration")
-        st.info(f"Max DOIs per analysis: 200")
-        st.info(f"Request delay: {Config.DELAY_BETWEEN_REQUESTS}s")
-        st.info(f"Max retries: {Config.MAX_RETRIES}")
 
 if __name__ == "__main__":
     main()
