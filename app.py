@@ -2721,7 +2721,7 @@ Altmetric metrics included for social media and online attention analysis
             return []
         text = text.lower()
         text = re.sub(r'[^a-zA-Z\s]', ' ', text)
-        text = re.sub r'\s+', ' ', text).strip()
+        text = re.sub(r'\s+', ' ', text).strip()
         words = text.split()
         scientific_words = []
         for word in words:
@@ -3273,3 +3273,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
