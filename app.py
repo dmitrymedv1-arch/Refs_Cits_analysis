@@ -267,7 +267,7 @@ class AuthorExtractor:
         initial = parts[0][0].upper() if parts[0] else ''
         return f"{surname} {initial}." if initial else surname
 
-    def extract_affiliations_and_countries(openalex_data):
+    def extract_affiliations_and_countries(self, openalex_data):
         """Простая функция извлечения аффилиаций и стран из OpenAlex данных"""
         affiliations = set()
         countries = set()
@@ -373,41 +373,6 @@ class AltmetricProcessor:
 
 # ====== MAIN CITATION ANALYZER ======
 class CitationAnalyzer:
-    
-    def extract_affiliations_and_countries(self, openalex_data):
-        """Простая функция извлечения аффилиаций и стран из OpenAlex данных"""
-        affiliations = set()
-        countries = set()
-        authors_list = []
-    
-        if not openalex_data:
-            return authors_list, list(affiliations), list(countries)
-    
-        # Проверяем наличие ключа 'authorships'
-        if 'authorships' not in openalex_data:
-            return authors_list, list(affiliations), list(countries)
-    
-        try:
-            for auth in openalex_data['authorships']:
-                author_name = auth.get('author', {}).get('display_name', 'Unknown')
-                authors_list.append(author_name)
-            
-                # Проверяем наличие ключа 'institutions'
-                if 'institutions' in auth:
-                    for inst in auth.get('institutions', []):
-                        inst_name = inst.get('display_name')
-                        country_code = inst.get('country_code')
-                    
-                        if inst_name:
-                            affiliations.add(inst_name)
-                        if country_code:
-                            countries.add(country_code.upper())
-        except (KeyError, TypeError, AttributeError) as e:
-            # Логируем ошибку, но продолжаем выполнение
-            print(f"Warning in extract_affiliations_and_countries: {e}")
-            pass
-    
-        return authors_list, list(affiliations), list(countries)
     
     def __init__(self, rate_limit_calls=10, rate_limit_period=1):
         # Persistent caching
@@ -863,7 +828,7 @@ class CitationAnalyzer:
         """Упрощенная обработка аффилиаций и стран"""
         try:
             # Используем простую функцию извлечения из OpenAlex
-            authors_list, openalex_affiliations, openalex_countries = extract_affiliations_and_countries(openalex_data)
+            authors_list, openalex_affiliations, openalex_countries = self.author_extractor.extract_affiliations_and_countries(openalex_data)
         
             # Для Crossref используем простой подход
             crossref_affiliations = []
@@ -1419,16 +1384,16 @@ class CitationAnalyzer:
             all_affiliations = []
             for affil_string in citations_df['affiliations']:
                 if pd.isna(affil_string) or affil_string in ['Unknown', 'Error', '']:
+                    all_affiliations.append('Unknown')  # Include 'Unknown' as a category
                     continue
-
                 try:
                     affil_list = affil_string.split(';')
                     for affil in affil_list:
                         clean_affil = affil.lstrip().rstrip()
-                        if clean_affil and clean_affil not in ['Unknown', 'Error']:
+                        if clean_affil:
                             all_affiliations.append(clean_affil)
                 except Exception:
-                    pass
+                    all_affiliations.append('Unknown')
 
             if not all_affiliations:
                 return pd.DataFrame(columns=['affiliation', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique'])
@@ -1447,6 +1412,9 @@ class CitationAnalyzer:
 
             unique_affiliations = []
             for affil_string in unique_df['affiliations']:
+                if pd.isna(affil_string) or affil_string in ['Unknown', 'Error', '']:
+                    unique_affiliations.append('Unknown')  # Include 'Unknown' for unique as well
+                    continue
                 if affil_string and affil_string not in ['Unknown', 'Error']:
                     affil_list = affil_string.split(';')
                     unique_affiliations.extend([affil.strip() for affil in affil_list if affil.strip()])
@@ -1493,6 +1461,9 @@ class CitationAnalyzer:
             collaborations = []
 
             for countries in citations_df['countries']:
+                if pd.isna(countries) or countries in ['Unknown', 'Error', '']:
+                    single_countries.append('Unknown')  # Include 'Unknown' as single
+                    continue
                 if countries not in ['Unknown', 'Error']:
                     country_list = [c.strip() for c in countries.split(';')]
                     if len(country_list) == 1:
@@ -1526,6 +1497,9 @@ class CitationAnalyzer:
             collaborations_unique = []
 
             for countries in unique_df['countries']:
+                if pd.isna(countries) or countries in ['Unknown', 'Error', '']:
+                    single_countries_unique.append('Unknown')  # Include 'Unknown' for unique
+                    continue
                 if countries not in ['Unknown', 'Error']:
                     country_list = [c.strip() for c in countries.split(';')]
                     if len(country_list) == 1:
@@ -2454,16 +2428,16 @@ Altmetric metrics included for social media and online attention analysis
             all_affiliations = []
             for affil_string in references_df['affiliations']:
                 if pd.isna(affil_string) or affil_string in ['Unknown', 'Error', '']:
+                    all_affiliations.append('Unknown')  # Include 'Unknown' as a category
                     continue
-
                 try:
                     affil_list = affil_string.split(';')
                     for affil in affil_list:
                         clean_affil = affil.strip()
-                        if clean_affil and clean_affil not in ['Unknown', 'Error']:
+                        if clean_affil:
                             all_affiliations.append(clean_affil)
                 except Exception:
-                    pass
+                    all_affiliations.append('Unknown')
 
             if not all_affiliations:
                 return pd.DataFrame(columns=['affiliation', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique'])
@@ -2482,6 +2456,9 @@ Altmetric metrics included for social media and online attention analysis
 
             unique_affiliations = []
             for affil_string in unique_df['affiliations']:
+                if pd.isna(affil_string) or affil_string in ['Unknown', 'Error', '']:
+                    unique_affiliations.append('Unknown')  # Include 'Unknown' for unique as well
+                    continue
                 if affil_string and affil_string not in ['Unknown', 'Error']:
                     affil_list = affil_string.split(';')
                     unique_affiliations.extend([affil.strip() for affil in affil_list if affil.strip()])
@@ -2528,6 +2505,9 @@ Altmetric metrics included for social media and online attention analysis
             collaborations = []
 
             for countries in references_df['countries']:
+                if pd.isna(countries) or countries in ['Unknown', 'Error', '']:
+                    single_countries.append('Unknown')  # Include 'Unknown' as single
+                    continue
                 if countries not in ['Unknown', 'Error']:
                     country_list = [c.strip() for c in countries.split(';')]
                     if len(country_list) == 1:
@@ -2561,6 +2541,9 @@ Altmetric metrics included for social media and online attention analysis
             collaborations_unique = []
 
             for countries in unique_df['countries']:
+                if pd.isna(countries) or countries in ['Unknown', 'Error', '']:
+                    single_countries_unique.append('Unknown')  # Include 'Unknown' for unique
+                    continue
                 if countries not in ['Unknown', 'Error']:
                     country_list = [c.strip() for c in countries.split(';')]
                     if len(country_list) == 1:
@@ -3254,9 +3237,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
