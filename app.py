@@ -620,6 +620,7 @@ class AdvancedCitationAnalysis:
         if df_copy.empty:
             return None, pd.DataFrame()
             
+        df_copy['year_numeric'] = df_copy['year_numeric'].astype(int)
         df_copy['reference_age'] = current_year - df_copy['year_numeric']
         age_counts = df_copy['reference_age'].value_counts().sort_index()
         
@@ -662,7 +663,9 @@ class AdvancedCitationAnalysis:
         unique_refs_copy = unique_refs_copy[unique_refs_copy['year_numeric'].notna()]
         
         if unique_refs_copy.empty:
-            return unique_refs
+            return pd.DataFrame()
+
+        unique_refs_copy['year_numeric'] = unique_refs_copy['year_numeric'].astype(int)
             
         year_baseline = unique_refs_copy.groupby('year_numeric')['citation_count_openalex'].median().to_dict()
         unique_refs_copy['expected_citations'] = unique_refs_copy['year_numeric'].map(year_baseline)
@@ -1532,6 +1535,9 @@ class CitationAnalyzer:
 
         citing_details_df = pd.DataFrame(citing_articles_details) if citing_articles_details else pd.DataFrame()
 
+        st.session_state.citing_df = citing_articles_df
+        st.session_state.citing_titles = all_citing_titles
+        
         return citing_articles_df, citing_details_df, citing_results, all_citing_titles
 
     def get_unique_citations(self, citations_df: pd.DataFrame) -> pd.DataFrame:
@@ -1975,16 +1981,54 @@ class CitationAnalyzer:
                 affiliations_percentage = 0
 
             # NEW ADVANCED ANALYSIS
-            citation_half_life, age_dist_df = self.calculate_citation_half_life(citing_articles_df)
-            intellectual_debt_df = self.calculate_intellectual_debt(citing_articles_df)
-            citation_premium_df = self.calculate_citation_premium(unique_citations_df)
-            echo_chamber_index = self.calculate_echo_chamber_index(citing_articles_df)
-            citation_dna_df = self.calculate_citation_dna(citing_articles_df)
-            
-            # Citation flow networks
-            journal_flow_df = self.build_citation_flow_network(citing_articles_df, 'journal')
-            publisher_flow_df = self.build_citation_flow_network(citing_articles_df, 'publisher')
-            country_flow_df = self.build_citation_flow_network(citing_articles_df, 'country')
+            try:
+                citation_half_life, age_dist_df = self.calculate_citation_half_life(citing_articles_df)
+            except Exception as e:
+                citation_half_life, age_dist_df = None, pd.DataFrame()
+                st.warning(f"Citation Half-Life calculation failed: {e}")
+
+            try:
+                intellectual_debt_df = self.calculate_intellectual_debt(citing_articles_df)
+            except Exception as e:
+                intellectual_debt_df = pd.DataFrame()
+                st.warning(f"Intellectual Debt calculation failed: {e}")
+
+            try:
+                citation_premium_df = self.calculate_citation_premium(unique_citations_df) if not unique_citations_df.empty else pd.DataFrame()
+            except Exception as e:
+                citation_premium_df = pd.DataFrame()
+                st.warning(f"Citation Premium calculation failed: {e}")
+
+            try:
+                echo_chamber_index = self.calculate_echo_chamber_index(citing_articles_df)
+            except Exception as e:
+                echo_chamber_index = 0.0
+                st.warning(f"Echo Chamber Index calculation failed: {e}")
+
+            try:
+                citation_dna_df = self.calculate_citation_dna(citing_articles_df)
+            except Exception as e:
+                citation_dna_df = pd.DataFrame()
+                st.warning(f"Citation DNA calculation failed: {e}")
+
+            # Citation flow networks - с проверкой наличия колонок
+            try:
+                journal_flow_df = self.build_citation_flow_network(citing_articles_df, 'journal')
+            except Exception as e:
+                journal_flow_df = pd.DataFrame()
+                st.warning(f"Journal flow network failed: {e}")
+
+            try:
+                publisher_flow_df = self.build_citation_flow_network(citing_articles_df, 'publisher')
+            except Exception as e:
+                publisher_flow_df = pd.DataFrame()
+                st.warning(f"Publisher flow network failed: {e}")
+
+            try:
+                country_flow_df = self.build_citation_flow_network(citing_articles_df, 'country')
+            except Exception as e:
+                country_flow_df = pd.DataFrame()
+                st.warning(f"Country flow network failed: {e}")
 
             # Clustering analysis
             authors_freq_df = self.analyze_citation_authors_frequency(citing_articles_df)
@@ -2460,6 +2504,9 @@ Affiliations normalized and grouped for consistent organization names
         except Exception as e:
             pass
 
+        st.session_state.combined_df = combined_references_df
+        st.session_state.all_titles = all_titles
+        
         return combined_references_df, source_articles_df, len(all_references), len(unique_dois), all_titles
 
     def enhance_incomplete_data(self, references_df: pd.DataFrame) -> pd.DataFrame:
@@ -2958,16 +3005,54 @@ Affiliations normalized and grouped for consistent organization names
                 affiliations_percentage = 0
 
             # NEW ADVANCED ANALYSIS
-            citation_half_life, age_dist_df = self.calculate_citation_half_life(combined_df)
-            intellectual_debt_df = self.calculate_intellectual_debt(combined_df)
-            citation_premium_df = self.calculate_citation_premium(unique_df)
-            echo_chamber_index = self.calculate_echo_chamber_index(combined_df)
-            citation_dna_df = self.calculate_citation_dna(combined_df)
-            
-            # Citation flow networks
-            journal_flow_df = self.build_citation_flow_network(combined_df, 'journal')
-            publisher_flow_df = self.build_citation_flow_network(combined_df, 'publisher')
-            country_flow_df = self.build_citation_flow_network(combined_df, 'country')
+            try:
+                citation_half_life, age_dist_df = self.calculate_citation_half_life(combined_df)
+            except Exception as e:
+                citation_half_life, age_dist_df = None, pd.DataFrame()
+                st.warning(f"Citation Half-Life calculation failed: {e}")
+
+            try:
+                intellectual_debt_df = self.calculate_intellectual_debt(combined_df)
+            except Exception as e:
+                intellectual_debt_df = pd.DataFrame()
+                st.warning(f"Intellectual Debt calculation failed: {e}")
+
+            try:
+                citation_premium_df = self.calculate_citation_premium(unique_df) if not unique_df.empty else pd.DataFrame()
+            except Exception as e:
+                citation_premium_df = pd.DataFrame()
+                st.warning(f"Citation Premium calculation failed: {e}")
+
+            try:
+                echo_chamber_index = self.calculate_echo_chamber_index(combined_df)
+            except Exception as e:
+                echo_chamber_index = 0.0
+                st.warning(f"Echo Chamber Index calculation failed: {e}")
+
+            try:
+                citation_dna_df = self.calculate_citation_dna(combined_df)
+            except Exception as e:
+                citation_dna_df = pd.DataFrame()
+                st.warning(f"Citation DNA calculation failed: {e}")
+
+            # Citation flow networks - с проверкой наличия колонок
+            try:
+    journal_flow_df = self.build_citation_flow_network(combined_df, 'journal')
+            except Exception as e:
+    journal_flow_df = pd.DataFrame()
+    st.warning(f"Journal flow network failed: {e}")
+
+            try:
+    publisher_flow_df = self.build_citation_flow_network(combined_df, 'publisher')
+            except Exception as e:
+    publisher_flow_df = pd.DataFrame()
+    st.warning(f"Publisher flow network failed: {e}")
+
+            try:
+    country_flow_df = self.build_citation_flow_network(combined_df, 'country')
+            except Exception as e:
+    country_flow_df = pd.DataFrame()
+    st.warning(f"Country flow network failed: {e}")
 
             # Clustering analysis
             authors_freq_df = self.analyze_authors_frequency(combined_df)
@@ -3367,6 +3452,11 @@ def main():
             st.info("Please run a References Analysis first to enable advanced analytics.")
         else:
             combined_df = st.session_state.combined_df
+            all_titles = st.session_state.get('all_titles', [])
+                if st.button("Initialize Advanced Analytics"):
+                    st.session_state.advanced_analytics_ready = True
+
+                if st.session_state.get('advanced_analytics_ready'):
             
             st.subheader("Citation Cartography")
             col1, col2, col3 = st.columns(3)
@@ -3432,3 +3522,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
