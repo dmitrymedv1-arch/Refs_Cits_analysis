@@ -3037,22 +3037,22 @@ Affiliations normalized and grouped for consistent organization names
 
             # Citation flow networks - с проверкой наличия колонок
             try:
-    journal_flow_df = self.build_citation_flow_network(combined_df, 'journal')
+                journal_flow_df = self.build_citation_flow_network(combined_df, 'journal')
             except Exception as e:
-    journal_flow_df = pd.DataFrame()
-    st.warning(f"Journal flow network failed: {e}")
+                journal_flow_df = pd.DataFrame()
+                st.warning(f"Journal flow network failed: {e}")
 
             try:
-    publisher_flow_df = self.build_citation_flow_network(combined_df, 'publisher')
+                publisher_flow_df = self.build_citation_flow_network(combined_df, 'publisher')
             except Exception as e:
-    publisher_flow_df = pd.DataFrame()
-    st.warning(f"Publisher flow network failed: {e}")
+                publisher_flow_df = pd.DataFrame()
+                st.warning(f"Publisher flow network failed: {e}")
 
             try:
-    country_flow_df = self.build_citation_flow_network(combined_df, 'country')
+                country_flow_df = self.build_citation_flow_network(combined_df, 'country')
             except Exception as e:
-    country_flow_df = pd.DataFrame()
-    st.warning(f"Country flow network failed: {e}")
+                country_flow_df = pd.DataFrame()
+                st.warning(f"Country flow network failed: {e}")
 
             # Clustering analysis
             authors_freq_df = self.analyze_authors_frequency(combined_df)
@@ -3522,4 +3522,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
