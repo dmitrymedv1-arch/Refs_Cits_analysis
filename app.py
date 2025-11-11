@@ -383,7 +383,398 @@ class FastAffiliationProcessor:
             return []
 
 # =============================================
-# MAIN CITATION ANALYZER
+# ADVANCED CLUSTERING AND ANALYSIS MODULES
+# =============================================
+
+class AdvancedClustering:
+    """Advanced clustering methods for authors, journals, affiliations and titles"""
+    
+    def __init__(self):
+        self.stop_words = set(stopwords.words('english'))
+        self.stemmer = PorterStemmer()
+        
+    def cluster_authors_by_patterns(self, authors_df: pd.DataFrame) -> Dict[str, Any]:
+        """Умная кластеризация авторов по паттернам публикаций"""
+        if authors_df.empty:
+            return {}
+            
+        clusters = {
+            "high_volume_high_impact": {
+                "description": "Высокопродуктивные авторы с высоким impact",
+                "criteria": "publication_count > 5 AND avg_citations > 10",
+                "authors": []
+            },
+            "rising_stars": {
+                "description": "Молодые авторы с быстрорастущей цитируемостью",
+                "criteria": "publication_count 2-5 AND avg_citations > 5",
+                "authors": []
+            },
+            "specialists": {
+                "description": "Авторы с узкой специализацией",
+                "criteria": "publication_count 3-8 AND first_author_ratio > 0.6",
+                "authors": []
+            },
+            "collaborators": {
+                "description": "Авторы с высокой коллаборационной активностью",
+                "criteria": "avg_coauthors > 8",
+                "authors": []
+            }
+        }
+        
+        for _, author in authors_df.iterrows():
+            pub_count = author.get('publication_count', 0)
+            avg_citations = author.get('avg_citations', 0)
+            first_author_ratio = author.get('first_author_ratio', 0)
+            
+            if pub_count > 5 and avg_citations > 10:
+                clusters["high_volume_high_impact"]["authors"].append(author)
+            elif 2 <= pub_count <= 5 and avg_citations > 5:
+                clusters["rising_stars"]["authors"].append(author)
+            elif 3 <= pub_count <= 8 and first_author_ratio > 0.6:
+                clusters["specialists"]["authors"].append(author)
+        
+        return clusters
+    
+    def cluster_journals_by_impact(self, journals_df: pd.DataFrame) -> Dict[str, Any]:
+        """Кластеризация журналов по impact и тематике"""
+        if journals_df.empty:
+            return {}
+            
+        clusters = {
+            "elite_high_impact": {
+                "description": "Элитные журналы с очень высоким impact",
+                "criteria": "avg_citations > 20 AND frequency_total > 10",
+                "journals": []
+            },
+            "core_field_journals": {
+                "description": "Основные журналы field'а",
+                "criteria": "frequency_total > 20 AND avg_citations 5-20",
+                "journals": []
+            },
+            "specialized_niche": {
+                "description": "Специализированные нишевые журналы",
+                "criteria": "frequency_total 5-15 AND avg_citations > 3",
+                "journals": []
+            },
+            "emerging_venues": {
+                "description": "Появляющиеся площадки для публикаций",
+                "criteria": "frequency_total < 5 BUT avg_citations > 5",
+                "journals": []
+            }
+        }
+        
+        for _, journal in journals_df.iterrows():
+            freq = journal.get('frequency_total', 0)
+            avg_cite = journal.get('avg_citations', 0)
+            
+            if avg_cite > 20 and freq > 10:
+                clusters["elite_high_impact"]["journals"].append(journal)
+            elif freq > 20 and 5 <= avg_cite <= 20:
+                clusters["core_field_journals"]["journals"].append(journal)
+            elif 5 <= freq <= 15 and avg_cite > 3:
+                clusters["specialized_niche"]["journals"].append(journal)
+            elif freq < 5 and avg_cite > 5:
+                clusters["emerging_venues"]["journals"].append(journal)
+        
+        return clusters
+    
+    def cluster_affiliations_by_type(self, affiliations_df: pd.DataFrame) -> Dict[str, Any]:
+        """Кластеризация аффилиаций по типу и активности"""
+        if affiliations_df.empty:
+            return {}
+            
+        university_keywords = {'university', 'college', 'universität', 'universitat'}
+        research_keywords = {'institute', 'research', 'academy', 'laboratory'}
+        medical_keywords = {'hospital', 'medical', 'clinic', 'health'}
+        corporate_keywords = {'company', 'corp', 'inc', 'ltd', 'gmbh'}
+        
+        clusters = {
+            "research_universities": {
+                "description": "Исследовательские университеты",
+                "affiliations": []
+            },
+            "research_institutes": {
+                "description": "Специализированные исследовательские институты",
+                "affiliations": []
+            },
+            "medical_centers": {
+                "description": "Медицинские центры и больницы",
+                "affiliations": []
+            },
+            "corporate_labs": {
+                "description": "Корпоративные исследовательские лаборатории",
+                "affiliations": []
+            },
+            "other_institutions": {
+                "description": "Другие учреждения",
+                "affiliations": []
+            }
+        }
+        
+        for _, affil in affiliations_df.iterrows():
+            affil_name = affil.get('affiliation', '').lower()
+            
+            if any(keyword in affil_name for keyword in university_keywords):
+                clusters["research_universities"]["affiliations"].append(affil)
+            elif any(keyword in affil_name for keyword in research_keywords):
+                clusters["research_institutes"]["affiliations"].append(affil)
+            elif any(keyword in affil_name for keyword in medical_keywords):
+                clusters["medical_centers"]["affiliations"].append(affil)
+            elif any(keyword in affil_name for keyword in corporate_keywords):
+                clusters["corporate_labs"]["affiliations"].append(affil)
+            else:
+                clusters["other_institutions"]["affiliations"].append(affil)
+        
+        return clusters
+    
+    def cluster_titles_by_themes(self, titles: List[str]) -> Dict[str, Any]:
+        """Тематическая кластеризация заголовков статей"""
+        if not titles:
+            return {}
+            
+        theme_keywords = {
+            "materials_science": {
+                "keywords": ["graphene", "composite", "nanomaterial", "polymer", "coating", "alloy"],
+                "titles": []
+            },
+            "catalysis": {
+                "keywords": ["catalyst", "reaction", "synthesis", "efficiency", "conversion"],
+                "titles": []
+            },
+            "biomedical": {
+                "keywords": ["drug", "delivery", "therapy", "biomedical", "cell", "tissue"],
+                "titles": []
+            },
+            "energy": {
+                "keywords": ["battery", "solar", "energy", "fuel", "storage", "conversion"],
+                "titles": []
+            },
+            "electronics": {
+                "keywords": ["sensor", "electronic", "device", "circuit", "semiconductor"],
+                "titles": []
+            }
+        }
+        
+        for title in titles:
+            if title in ['Unknown', 'Error']:
+                continue
+                
+            title_lower = title.lower()
+            matched_theme = None
+            max_matches = 0
+            
+            for theme, data in theme_keywords.items():
+                matches = sum(1 for keyword in data["keywords"] if keyword in title_lower)
+                if matches > max_matches:
+                    max_matches = matches
+                    matched_theme = theme
+            
+            if matched_theme and max_matches >= 1:
+                theme_keywords[matched_theme]["titles"].append(title)
+        
+        return theme_keywords
+
+# =============================================
+# ADVANCED CITATION ANALYSIS MODULES
+# =============================================
+
+class AdvancedCitationAnalysis:
+    """Продвинутые методы анализа цитирований"""
+    
+    def __init__(self):
+        self.performance_monitor = PerformanceMonitor()
+    
+    def build_citation_flow_network(self, df: pd.DataFrame, level: str = 'journal') -> pd.DataFrame:
+        """Citation Cartography™ - направленные сети влияния"""
+        if df.empty:
+            return pd.DataFrame()
+            
+        source_col = f'source_{level}'
+        target_col = level
+        
+        # Проверяем наличие необходимых колонок
+        if source_col not in df.columns or target_col not in df.columns:
+            return pd.DataFrame()
+        
+        flows = df[[source_col, target_col]].dropna()
+        if flows.empty:
+            return pd.DataFrame()
+            
+        flows = flows[flows[source_col] != flows[target_col]]  # убираем петли
+        flow_counts = flows.value_counts().reset_index()
+        flow_counts.columns = ['source', 'target', 'weight']
+        return flow_counts.sort_values('weight', ascending=False)
+    
+    def calculate_citation_half_life(self, df: pd.DataFrame) -> Tuple[Any, pd.DataFrame]:
+        """Citation Half-Life - когда умирает 50% ссылок"""
+        if df.empty:
+            return None, pd.DataFrame()
+            
+        current_year = datetime.now().year
+        
+        # Создаем копию чтобы избежать предупреждений
+        df_copy = df.copy()
+        df_copy['year_numeric'] = pd.to_numeric(df_copy['year'], errors='coerce')
+        df_copy = df_copy[df_copy['year_numeric'].notna()]
+        
+        if df_copy.empty:
+            return None, pd.DataFrame()
+            
+        df_copy['reference_age'] = current_year - df_copy['year_numeric']
+        age_counts = df_copy['reference_age'].value_counts().sort_index()
+        
+        if age_counts.empty:
+            return None, pd.DataFrame()
+            
+        cumulative = age_counts.cumsum()
+        total = cumulative.iloc[-1]
+        
+        half_life = None
+        for age, cum in cumulative.items():
+            if cum >= total * 0.5:
+                half_life = age
+                break
+        
+        age_dist_df = age_counts.reset_index()
+        age_dist_df.columns = ['age', 'count']
+        age_dist_df['cumulative'] = cumulative.values
+        age_dist_df['cumulative_percentage'] = (age_dist_df['cumulative'] / total * 100).round(2)
+        
+        return half_life, age_dist_df
+    
+    def calculate_intellectual_debt(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Intellectual Debt - суммарная цитируемость ссылок"""
+        if df.empty:
+            return pd.DataFrame()
+            
+        # Исправление: Принудительно преобразуем в numeric перед sum
+        df['citation_count_openalex_numeric'] = pd.to_numeric(df['citation_count_openalex'], errors='coerce').fillna(0)
+        intellectual_debt = df.groupby('source_doi')['citation_count_openalex_numeric'].sum().reset_index()
+        intellectual_debt.columns = ['doi', 'intellectual_debt']
+        return intellectual_debt
+    
+    def calculate_citation_premium(self, unique_refs: pd.DataFrame) -> pd.DataFrame:
+        """Citation Premium - относительная влиятельность"""
+        if unique_refs.empty:
+            return pd.DataFrame()
+            
+        # Создаем копию чтобы избежать предупреждений
+        unique_refs_copy = unique_refs.copy()
+        unique_refs_copy['year_numeric'] = pd.to_numeric(unique_refs_copy['year'], errors='coerce')
+        unique_refs_copy = unique_refs_copy[unique_refs_copy['year_numeric'].notna()]
+        
+        if unique_refs_copy.empty:
+            return unique_refs
+            
+        # Исправление: Преобразование в numeric
+        unique_refs_copy['citation_count_openalex_numeric'] = pd.to_numeric(unique_refs_copy['citation_count_openalex'], errors='coerce').fillna(0)
+        year_baseline = unique_refs_copy.groupby('year_numeric')['citation_count_openalex_numeric'].median().to_dict()
+        unique_refs_copy['expected_citations'] = unique_refs_copy['year_numeric'].map(year_baseline)
+        
+        # Защита от деления на ноль
+        unique_refs_copy['citation_premium'] = unique_refs_copy.apply(
+            lambda x: (x['citation_count_openalex_numeric'] / x['expected_citations'] 
+                      if x['expected_citations'] > 0 else 0), 
+            axis=1
+        ).round(2)
+        
+        return unique_refs_copy
+    
+    def calculate_echo_chamber_index(self, df: pd.DataFrame) -> float:
+        """Echo Chamber Index - мера научной открытости"""
+        if df.empty:
+            return 0.0
+            
+        # Проверяем наличие необходимых колонок
+        required_cols = ['source_journal', 'journal_abbreviation', 'source_publisher', 'publisher', 'source_country', 'countries']
+        if not all(col in df.columns for col in required_cols):
+            return 0.0
+        
+        same_journal = len(df[df['source_journal'] == df['journal_abbreviation']])
+        same_publisher = len(df[df['source_publisher'] == df['publisher']])
+        
+        # Для стран сложнее - проверяем пересечение
+        def shares_country(source_country, target_countries):
+            if source_country in ['Unknown', 'Error', ''] or target_countries in ['Unknown', 'Error', '']:
+                return False
+            try:
+                source_countries = set(str(source_country).split(';'))
+                target_countries_set = set(str(target_countries).split(';'))
+                return len(source_countries.intersection(target_countries_set)) > 0
+            except:
+                return False
+        
+        same_country = df.apply(
+            lambda row: shares_country(row['source_country'], row['countries']), axis=1
+        ).sum()
+        
+        total = len(df)
+        if total == 0:
+            return 0.0
+        
+        echo_chamber_index = (same_journal + same_publisher + same_country) / (3 * total)
+        return round(echo_chamber_index, 3)
+    
+    def calculate_citation_dna(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Citation DNA - уникальный профиль цитирования статей"""
+        if df.empty:
+            return pd.DataFrame()
+            
+        # Топ журналы (определяем как топ-10 по frequency)
+        journal_counts = df['journal_abbreviation'].value_counts()
+        top_journals = set(journal_counts.head(10).index)
+        
+        # OA издатели (примерный список)
+        oa_publishers = {'PLOS', 'MDPI', 'Frontiers', 'BioMed Central', 'SpringerOpen'}
+        
+        def calculate_dna_metrics(source_group):
+            if source_group.empty:
+                return {}
+                
+            total_refs = len(source_group)
+            if total_refs == 0:
+                return {}
+            
+            elite_journal_share = len(source_group[source_group['journal_abbreviation'].isin(top_journals)]) / total_refs
+            oa_share = len(source_group[source_group['publisher'].isin(oa_publishers)]) / total_refs
+            china_share = len(source_group[source_group['countries'].str.contains('CN', na=False)]) / total_refs
+            
+            # Self-citation (упрощенно)
+            self_cite_rate = len(source_group[
+                (source_group['source_journal'] == source_group['journal_abbreviation'])
+            ]) / total_refs
+            
+            # Исправление: Преобразование в numeric
+            source_group['citation_count_openalex_numeric'] = pd.to_numeric(source_group['citation_count_openalex'], errors='coerce').fillna(0)
+            intellectual_debt = source_group['citation_count_openalex_numeric'].sum()
+            
+            # Средний premium
+            if 'citation_premium' in source_group.columns:
+                source_group['citation_premium_numeric'] = pd.to_numeric(source_group['citation_premium'], errors='coerce').fillna(0)
+                premium_avg = source_group['citation_premium_numeric'].mean()
+            else:
+                premium_avg = 0
+            
+            return {
+                'elite_journal_share': round(elite_journal_share, 3),
+                'oa_share': round(oa_share, 3),
+                'china_share': round(china_share, 3),
+                'self_cite_rate': round(self_cite_rate, 3),
+                'intellectual_debt': intellectual_debt,
+                'premium_avg': round(premium_avg, 2)
+            }
+        
+        dna_results = []
+        for source_doi, group in df.groupby('source_doi'):
+            dna_metrics = calculate_dna_metrics(group)
+            if dna_metrics:
+                dna_metrics['source_doi'] = source_doi
+                dna_results.append(dna_metrics)
+        
+        return pd.DataFrame(dna_results)
+
+# =============================================
+# MAIN CITATION ANALYZER (UPDATED)
 # =============================================
 
 class CitationAnalyzer:
@@ -415,6 +806,11 @@ class CitationAnalyzer:
             'nanostructures', 'composite', 'composites', 'coating', 'coatings'
         }
         self.scientific_stopwords_stemmed = {self.stemmer.stem(word) for word in self.scientific_stopwords}
+        
+        # Initialize new modules
+        self.advanced_clustering = AdvancedClustering()
+        self.advanced_analysis = AdvancedCitationAnalysis()
+        
         self.setup_logging()
 
     def setup_logging(self):
@@ -657,7 +1053,8 @@ class CitationAnalyzer:
     def safe_calculate_annual_citation_rate(self, citation_count, publication_year, current_year=None):
         """Safe calculation of annual citation rate with error handling"""
         try:
-            if not isinstance(citation_count, (int, float)) or citation_count == 0:
+            citation_count = pd.to_numeric(citation_count, errors='coerce')
+            if pd.isna(citation_count) or citation_count == 0:
                 return 0.0
 
             years = self.calculate_years_since_publication(publication_year, current_year)
@@ -1252,11 +1649,15 @@ class CitationAnalyzer:
             for journal in journal_freq['journal_abbreviation']:
                 journal_articles = unique_df[unique_df['journal_abbreviation'] == journal]
 
-                total_crossref_citations = journal_articles['citation_count_crossref'].sum()
-                total_openalex_citations = journal_articles['citation_count_openalex'].sum()
+                # Исправление: Преобразование в numeric
+                journal_articles['citation_count_crossref_numeric'] = pd.to_numeric(journal_articles['citation_count_crossref'], errors='coerce').fillna(0)
+                journal_articles['citation_count_openalex_numeric'] = pd.to_numeric(journal_articles['citation_count_openalex'], errors='coerce').fillna(0)
 
-                avg_crossref_citations = journal_articles['citation_count_crossref'].mean() if len(journal_articles) > 0 else 0
-                avg_openalex_citations = journal_articles['citation_count_openalex'].mean() if len(journal_articles) > 0 else 0
+                total_crossref_citations = journal_articles['citation_count_crossref_numeric'].sum()
+                total_openalex_citations = journal_articles['citation_count_openalex_numeric'].sum()
+
+                avg_crossref_citations = journal_articles['citation_count_crossref_numeric'].mean() if len(journal_articles) > 0 else 0
+                avg_openalex_citations = journal_articles['citation_count_openalex_numeric'].mean() if len(journal_articles) > 0 else 0
 
                 journal_citation_metrics.append({
                     'journal_abbreviation': journal,
@@ -1497,9 +1898,51 @@ class CitationAnalyzer:
         except Exception as e:
             return pd.DataFrame()
 
+    # NEW ADVANCED ANALYSIS METHODS
+    def build_citation_flow_network(self, df: pd.DataFrame, level: str = 'journal') -> pd.DataFrame:
+        """Citation Cartography™ - направленные сети влияния"""
+        return self.advanced_analysis.build_citation_flow_network(df, level)
+
+    def calculate_citation_half_life(self, df: pd.DataFrame) -> Tuple[Any, pd.DataFrame]:
+        """Citation Half-Life - когда умирает 50% ссылок"""
+        return self.advanced_analysis.calculate_citation_half_life(df)
+
+    def calculate_intellectual_debt(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Intellectual Debt - суммарная цитируемость ссылок"""
+        return self.advanced_analysis.calculate_intellectual_debt(df)
+
+    def calculate_citation_premium(self, unique_refs: pd.DataFrame) -> pd.DataFrame:
+        """Citation Premium - относительная влиятельность"""
+        return self.advanced_analysis.calculate_citation_premium(unique_refs)
+
+    def calculate_echo_chamber_index(self, df: pd.DataFrame) -> float:
+        """Echo Chamber Index - мера научной открытости"""
+        return self.advanced_analysis.calculate_echo_chamber_index(df)
+
+    def calculate_citation_dna(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Citation DNA - уникальный профиль цитирования статей"""
+        return self.advanced_analysis.calculate_citation_dna(df)
+
+    # NEW CLUSTERING METHODS
+    def cluster_authors_by_patterns(self, authors_df: pd.DataFrame) -> Dict[str, Any]:
+        """Умная кластеризация авторов по паттернам публикаций"""
+        return self.advanced_clustering.cluster_authors_by_patterns(authors_df)
+
+    def cluster_journals_by_impact(self, journals_df: pd.DataFrame) -> Dict[str, Any]:
+        """Кластеризация журналов по impact и тематике"""
+        return self.advanced_clustering.cluster_journals_by_impact(journals_df)
+
+    def cluster_affiliations_by_type(self, affiliations_df: pd.DataFrame) -> Dict[str, Any]:
+        """Кластеризация аффилиаций по типу и активности"""
+        return self.advanced_clustering.cluster_affiliations_by_type(affiliations_df)
+
+    def cluster_titles_by_themes(self, titles: List[str]) -> Dict[str, Any]:
+        """Тематическая кластеризация заголовков статей"""
+        return self.advanced_clustering.cluster_titles_by_themes(titles)
+
     def save_citation_analysis_to_excel(self, citing_articles_df: pd.DataFrame, citing_details_df: pd.DataFrame,
                                       doi_list: List[str], citing_results: Dict, all_citing_titles: List[str]) -> str:
-        """Saves complete citing articles analysis to Excel"""
+        """Saves complete citing articles analysis to Excel with new advanced analysis"""
         try:
             timestamp = int(time.time())
             temp_dir = tempfile.mkdtemp()
@@ -1546,11 +1989,111 @@ class CitationAnalyzer:
                 countries_percentage = 0
                 affiliations_percentage = 0
 
+            # NEW ADVANCED ANALYSIS - с try-except
+            try:
+                citation_half_life, age_dist_df = self.calculate_citation_half_life(citing_articles_df)
+            except Exception as e:
+                citation_half_life, age_dist_df = None, pd.DataFrame()
+                self.logger.error(f"Error in citation_half_life: {e}")
+
+            try:
+                intellectual_debt_df = self.calculate_intellectual_debt(citing_articles_df)
+            except Exception as e:
+                intellectual_debt_df = pd.DataFrame()
+                self.logger.error(f"Error in intellectual_debt: {e}")
+
+            try:
+                citation_premium_df = self.calculate_citation_premium(unique_citations_df)
+            except Exception as e:
+                citation_premium_df = pd.DataFrame()
+                self.logger.error(f"Error in citation_premium: {e}")
+
+            try:
+                echo_chamber_index = self.calculate_echo_chamber_index(citing_articles_df)
+            except Exception as e:
+                echo_chamber_index = 0.0
+                self.logger.error(f"Error in echo_chamber_index: {e}")
+
+            try:
+                citation_dna_df = self.calculate_citation_dna(citing_articles_df)
+            except Exception as e:
+                citation_dna_df = pd.DataFrame()
+                self.logger.error(f"Error in citation_dna: {e}")
+            
+            # Citation flow networks
+            try:
+                journal_flow_df = self.build_citation_flow_network(citing_articles_df, 'journal')
+            except Exception as e:
+                journal_flow_df = pd.DataFrame()
+                self.logger.error(f"Error in journal_flow: {e}")
+
+            try:
+                publisher_flow_df = self.build_citation_flow_network(citing_articles_df, 'publisher')
+            except Exception as e:
+                publisher_flow_df = pd.DataFrame()
+                self.logger.error(f"Error in publisher_flow: {e}")
+
+            try:
+                country_flow_df = self.build_citation_flow_network(citing_articles_df, 'country')
+            except Exception as e:
+                country_flow_df = pd.DataFrame()
+                self.logger.error(f"Error in country_flow: {e}")
+
+            # Clustering analysis
+            try:
+                authors_freq_df = self.analyze_citation_authors_frequency(citing_articles_df)
+            except Exception as e:
+                authors_freq_df = pd.DataFrame()
+                self.logger.error(f"Error in authors_freq: {e}")
+
+            try:
+                journals_freq_df = self.analyze_citation_journals_frequency(citing_articles_df)
+            except Exception as e:
+                journals_freq_df = pd.DataFrame()
+                self.logger.error(f"Error in journals_freq: {e}")
+
+            try:
+                affiliations_freq_df = self.analyze_citation_affiliations_frequency(citing_articles_df)
+            except Exception as e:
+                affiliations_freq_df = pd.DataFrame()
+                self.logger.error(f"Error in affiliations_freq: {e}")
+            
+            try:
+                author_clusters = self.cluster_authors_by_patterns(authors_freq_df)
+            except Exception as e:
+                author_clusters = {}
+                self.logger.error(f"Error in author_clusters: {e}")
+
+            try:
+                journal_clusters = self.cluster_journals_by_impact(journals_freq_df)
+            except Exception as e:
+                journal_clusters = {}
+                self.logger.error(f"Error in journal_clusters: {e}")
+
+            try:
+                affiliation_clusters = self.cluster_affiliations_by_type(affiliations_freq_df)
+            except Exception as e:
+                affiliation_clusters = {}
+                self.logger.error(f"Error in affiliation_clusters: {e}")
+
+            try:
+                title_clusters = self.cluster_titles_by_themes(all_citing_titles)
+            except Exception as e:
+                title_clusters = {}
+                self.logger.error(f"Error in title_clusters: {e}")
+
             citing_info = ""
             if citing_results:
                 citing_info = f"\nCitations per source article:"
                 for doi, data in citing_results.items():
                     citing_info += f"\n  - {doi}: {data['count']} citations"
+
+            # Исправление: Безопасное суммирование
+            def safe_sum(series):
+                return pd.to_numeric(series, errors='coerce').sum()
+
+            total_debt = safe_sum(intellectual_debt_df['intellectual_debt']) if not intellectual_debt_df.empty else 0
+            avg_premium = citation_premium_df['citation_premium'].mean() if not citation_premium_df.empty else 0
 
             summary_content = f"""@MedvDmitry production
 
@@ -1565,11 +2108,18 @@ Total citation relationships: {total_citation_relationships}
 Total unique citing articles: {total_unique_citations}
 Successful citations: {len(citing_articles_df[citing_articles_df['error'].isna()]) if not citing_articles_df.empty else 0}
 Failed citations: {len(citing_articles_df[citing_articles_df['error'].notna()]) if not citing_articles_df.empty else 0}
-Unique authors: {len(self.analyze_citation_authors_frequency(citing_articles_df)) if not citing_articles_df.empty else 0}
-Unique journals: {len(self.analyze_citation_journals_frequency(citing_articles_df)) if not citing_articles_df.empty else 0}
-Unique affiliations: {len(self.analyze_citation_affiliations_frequency(citing_articles_df)) if not citing_articles_df.empty else 0}
+Unique authors: {len(authors_freq_df) if not authors_freq_df.empty else 0}
+Unique journals: {len(journals_freq_df) if not journals_freq_df.empty else 0}
+Unique affiliations: {len(affiliations_freq_df) if not affiliations_freq_df.empty else 0}
 Unique countries: {len(self.analyze_citation_countries_frequency(citing_articles_df)) if not citing_articles_df.empty else 0}
 Duplicate citations: {len(duplicate_citations_df) if not duplicate_citations_df.empty else 0}
+
+ADVANCED METRICS
+================
+Citation Half-Life: {citation_half_life if citation_half_life else 'N/A'} years
+Echo Chamber Index: {echo_chamber_index:.3f} (0 = open, 1 = closed)
+Total Intellectual Debt: {total_debt:.1f}
+Average Citation Premium: {avg_premium:.2f}x
 
 DATA COMPLETENESS
 =================
@@ -1619,6 +2169,19 @@ Affiliations normalized and grouped for consistent organization names
                 ('Duplicate_Citations', duplicate_citations_df)
             ]
 
+            # Add new advanced analysis sheets
+            advanced_sheets = [
+                ('Citation_Half_Life_Analysis', age_dist_df),
+                ('Intellectual_Debt_Ranking', intellectual_debt_df),
+                ('Citation_Premium_Elite', citation_premium_df),
+                ('Citation_DNA_Profiles', citation_dna_df),
+                ('Journal_Citation_Flows', journal_flow_df),
+                ('Publisher_Citation_Flows', publisher_flow_df),
+                ('Country_Citation_Flows', country_flow_df)
+            ]
+
+            sheets_data.extend(advanced_sheets)
+
             analysis_methods = [
                 ('Author_Frequency_Citations', self.analyze_citation_authors_frequency),
                 ('Journal_Frequency_Citations', self.analyze_citation_journals_frequency),
@@ -1634,6 +2197,16 @@ Affiliations normalized and grouped for consistent organization names
                     sheets_data.append((sheet_name, result_df))
                 except Exception as e:
                     sheets_data.append((sheet_name, pd.DataFrame()))
+
+            # Add clustering results
+            clustering_sheets = [
+                ('Author_Clusters', self._clusters_to_dataframe(author_clusters)),
+                ('Journal_Clusters', self._clusters_to_dataframe(journal_clusters)),
+                ('Affiliation_Clusters', self._clusters_to_dataframe(affiliation_clusters)),
+                ('Title_Theme_Clusters', self._title_clusters_to_dataframe(title_clusters))
+            ]
+            
+            sheets_data.extend(clustering_sheets)
 
             try:
                 title_word_data = []
@@ -1680,6 +2253,44 @@ Affiliations normalized and grouped for consistent organization names
                 return excel_path
             except:
                 return "error_creating_citation_report"
+
+    def _clusters_to_dataframe(self, clusters: Dict[str, Any]) -> pd.DataFrame:
+        """Convert clusters to DataFrame for Excel export"""
+        if not clusters:
+            return pd.DataFrame()
+            
+        cluster_data = []
+        for cluster_name, cluster_info in clusters.items():
+            items = cluster_info.get('authors', []) or cluster_info.get('journals', []) or cluster_info.get('affiliations', [])
+            for item in items:
+                if isinstance(item, pd.Series):
+                    row_dict = item.to_dict()
+                    row_dict['cluster'] = cluster_name
+                    row_dict['cluster_description'] = cluster_info.get('description', '')
+                    cluster_data.append(row_dict)
+                elif isinstance(item, dict):
+                    item['cluster'] = cluster_name
+                    item['cluster_description'] = cluster_info.get('description', '')
+                    cluster_data.append(item)
+        
+        return pd.DataFrame(cluster_data) if cluster_data else pd.DataFrame()
+
+    def _title_clusters_to_dataframe(self, title_clusters: Dict[str, Any]) -> pd.DataFrame:
+        """Convert title clusters to DataFrame"""
+        if not title_clusters:
+            return pd.DataFrame()
+            
+        cluster_data = []
+        for theme, data in title_clusters.items():
+            for title in data.get('titles', []):
+                cluster_data.append({
+                    'theme': theme,
+                    'keywords': ', '.join(data.get('keywords', [])),
+                    'title': title,
+                    'title_count': len(data.get('titles', []))
+                })
+        
+        return pd.DataFrame(cluster_data) if cluster_data else pd.DataFrame()
 
     def process_doi_sequential(self, doi_list: List[str]) -> tuple[pd.DataFrame, pd.DataFrame, int, int, List[str]]:
         """Process DOIs sequentially to avoid API overload"""
@@ -1779,7 +2390,7 @@ Affiliations normalized and grouped for consistent organization names
                         'authors_surnames': 'Error', 'authors_with_initials': 'Error', 'author_count': 0,
                         'year': 'Unknown', 'journal_full_name': 'Error',
                         'journal_abbreviation': 'Error', 'publisher': 'Error',
-                        'citation_count_crossref': 'N/A', 'citation_count_openalex': 'N/A',
+                        'citation_count_crossref': 0, 'citation_count_openalex': 0,  # Изменено на 0 вместо 'N/A'
                         'affiliations': 'Error', 'countries': 'Error', 'error': str(e)
                     }
                 time.sleep(Config.DELAY_BETWEEN_REQUESTS)
@@ -1831,9 +2442,9 @@ Affiliations normalized and grouped for consistent organization names
                     'source_doi': doi, 'position': None, 'doi': doi, 'title': 'Unknown',
                     'authors': 'Error', 'authors_with_initials': 'Error', 'author_count': 0,
                     'year': 'Unknown', 'journal_full_name': 'Error', 'journal_abbreviation': 'Error',
-                    'publisher': 'Error', 'citation_count_crossref': 'N/A', 'citation_count_openalex': 'N/A',
-                    'annual_citation_rate_crossref': 'N/A', 'annual_citation_rate_openalex': 'N/A',
-                    'years_since_publication': 'N/A', 'affiliations': 'Error', 'countries': 'Error',
+                    'publisher': 'Error', 'citation_count_crossref': 0, 'citation_count_openalex': 0,
+                    'annual_citation_rate_crossref': 0, 'annual_citation_rate_openalex': 0,
+                    'years_since_publication': 1, 'affiliations': 'Error', 'countries': 'Error',
                     'error': str(e)
                 })
 
@@ -1908,9 +2519,9 @@ Affiliations normalized and grouped for consistent organization names
                             'authors': 'Unknown', 'authors_with_initials': 'Unknown', 'author_count': 0,
                             'year': ref.get('year', 'Unknown'), 'journal_full_name': 'Unknown',
                             'journal_abbreviation': 'Unknown', 'publisher': 'Unknown',
-                            'citation_count_crossref': 'N/A', 'citation_count_openalex': 'N/A',
-                            'annual_citation_rate_crossref': 'N/A', 'annual_citation_rate_openalex': 'N/A',
-                            'years_since_publication': 'N/A', 'affiliations': 'Unknown', 'countries': 'Unknown',
+                            'citation_count_crossref': 0, 'citation_count_openalex': 0,
+                            'annual_citation_rate_crossref': 0, 'annual_citation_rate_openalex': 0,
+                            'years_since_publication': 1, 'affiliations': 'Unknown', 'countries': 'Unknown',
                             'error': f"Invalid or missing DOI: {ref_doi}, no match found for title '{title}'"
                         })
 
@@ -2073,11 +2684,15 @@ Affiliations normalized and grouped for consistent organization names
             for journal in journal_freq['journal_abbreviation']:
                 journal_articles = unique_df[unique_df['journal_abbreviation'] == journal]
 
-                total_crossref_citations = journal_articles['citation_count_crossref'].sum()
-                total_openalex_citations = journal_articles['citation_count_openalex'].sum()
+                # Исправление: Преобразование в numeric
+                journal_articles['citation_count_crossref_numeric'] = pd.to_numeric(journal_articles['citation_count_crossref'], errors='coerce').fillna(0)
+                journal_articles['citation_count_openalex_numeric'] = pd.to_numeric(journal_articles['citation_count_openalex'], errors='coerce').fillna(0)
 
-                avg_crossref_citations = journal_articles['citation_count_crossref'].mean() if len(journal_articles) > 0 else 0
-                avg_openalex_citations = journal_articles['citation_count_openalex'].mean() if len(journal_articles) > 0 else 0
+                total_crossref_citations = journal_articles['citation_count_crossref_numeric'].sum()
+                total_openalex_citations = journal_articles['citation_count_openalex_numeric'].sum()
+
+                avg_crossref_citations = journal_articles['citation_count_crossref_numeric'].mean() if len(journal_articles) > 0 else 0
+                avg_openalex_citations = journal_articles['citation_count_openalex_numeric'].mean() if len(journal_articles) > 0 else 0
 
                 journal_citation_metrics.append({
                     'journal_abbreviation': journal,
@@ -2264,12 +2879,12 @@ Affiliations normalized and grouped for consistent organization names
             unique_df = self.get_unique_references(references_df)
             total_unique = len(unique_df)
             years_total = pd.to_numeric(references_df['year'], errors='coerce')
-            years_total = years_total[years_total.notna() & years_total.between(1900, 2026)].ast(int)
+            years_total = years_total[years_total.notna() & years_total.between(1900, 2026)].astype(int)
             year_counts_total = years_total.value_counts().reset_index()
             year_counts_total.columns = ['year', 'frequency_total']
             year_counts_total['percentage_total'] = round(year_counts_total['frequency_total'] / total_refs * 100, 2)
             years_unique = pd.to_numeric(unique_df['year'], errors='coerce')
-            years_unique = years_unique[years_unique.notna() & years_unique.between(1900, 2026)].ast(int)
+            years_unique = years_unique[years_unique.notna() & years_unique.between(1900, 2026)].astype(int)
             year_counts_unique = years_unique.value_counts().reset_index()
             year_counts_unique.columns = ['year', 'frequency_unique']
             year_counts_unique['percentage_unique'] = round(year_counts_unique['frequency_unique'] / total_unique * 100, 2)
@@ -2293,14 +2908,14 @@ Affiliations normalized and grouped for consistent organization names
             bins = period_starts + [period_starts[-1] + 5]
             labels = [f"{s}-{s+4}" for s in period_starts]
             years_total = pd.to_numeric(references_df['year'], errors='coerce')
-            years_total = years_total[years_total.notna() & years_total.between(1900, current_year)].ast(int)
+            years_total = years_total[years_total.notna() & years_total.between(1900, current_year)].astype(int)
             period_counts_total = pd.cut(years_total, bins=bins, labels=labels, right=False).astype(str)
             period_df_total = period_counts_total.value_counts().reset_index()
             period_df_total.columns = ['period', 'frequency_total']
             period_df_total['percentage_total'] = round(period_df_total['frequency_total'] / total_refs * 100, 2)
             period_df_total['period'] = period_df_total['period'].astype(str)
             years_unique = pd.to_numeric(unique_df['year'], errors='coerce')
-            years_unique = years_unique[years_unique.notna() & years_unique.between(1900, current_year)].ast(int)
+            years_unique = years_unique[years_unique.notna() & years_unique.between(1900, current_year)].astype(int)
             period_counts_unique = pd.cut(years_unique, bins=bins, labels=labels, right=False).astype(str)
             period_df_unique = period_counts_unique.value_counts().reset_index()
             period_df_unique.columns = ['period', 'frequency_unique']
@@ -2389,7 +3004,7 @@ Affiliations normalized and grouped for consistent organization names
     def save_all_data_to_excel(self, combined_df: pd.DataFrame, source_articles_df: pd.DataFrame,
                          doi_list: List[str], total_references: int, unique_dois: int,
                          all_titles: List[str]) -> str:
-        """Saves references analysis to Excel"""
+        """Saves references analysis to Excel with new advanced analysis"""
         try:
             timestamp = int(time.time())
             temp_dir = tempfile.mkdtemp()
@@ -2439,6 +3054,106 @@ Affiliations normalized and grouped for consistent organization names
                 countries_percentage = 0
                 affiliations_percentage = 0
 
+            # NEW ADVANCED ANALYSIS - с try-except
+            try:
+                citation_half_life, age_dist_df = self.calculate_citation_half_life(combined_df)
+            except Exception as e:
+                citation_half_life, age_dist_df = None, pd.DataFrame()
+                self.logger.error(f"Error in citation_half_life: {e}")
+
+            try:
+                intellectual_debt_df = self.calculate_intellectual_debt(combined_df)
+            except Exception as e:
+                intellectual_debt_df = pd.DataFrame()
+                self.logger.error(f"Error in intellectual_debt: {e}")
+
+            try:
+                citation_premium_df = self.calculate_citation_premium(unique_df)
+            except Exception as e:
+                citation_premium_df = pd.DataFrame()
+                self.logger.error(f"Error in citation_premium: {e}")
+
+            try:
+                echo_chamber_index = self.calculate_echo_chamber_index(combined_df)
+            except Exception as e:
+                echo_chamber_index = 0.0
+                self.logger.error(f"Error in echo_chamber_index: {e}")
+
+            try:
+                citation_dna_df = self.calculate_citation_dna(combined_df)
+            except Exception as e:
+                citation_dna_df = pd.DataFrame()
+                self.logger.error(f"Error in citation_dna: {e}")
+            
+            # Citation flow networks
+            try:
+                journal_flow_df = self.build_citation_flow_network(combined_df, 'journal')
+            except Exception as e:
+                journal_flow_df = pd.DataFrame()
+                self.logger.error(f"Error in journal_flow: {e}")
+
+            try:
+                publisher_flow_df = self.build_citation_flow_network(combined_df, 'publisher')
+            except Exception as e:
+                publisher_flow_df = pd.DataFrame()
+                self.logger.error(f"Error in publisher_flow: {e}")
+
+            try:
+                country_flow_df = self.build_citation_flow_network(combined_df, 'country')
+            except Exception as e:
+                country_flow_df = pd.DataFrame()
+                self.logger.error(f"Error in country_flow: {e}")
+
+            # Clustering analysis
+            try:
+                authors_freq_df = self.analyze_authors_frequency(combined_df)
+            except Exception as e:
+                authors_freq_df = pd.DataFrame()
+                self.logger.error(f"Error in authors_freq: {e}")
+
+            try:
+                journals_freq_df = self.analyze_journals_frequency(combined_df)
+            except Exception as e:
+                journals_freq_df = pd.DataFrame()
+                self.logger.error(f"Error in journals_freq: {e}")
+
+            try:
+                affiliations_freq_df = self.analyze_affiliations_frequency(combined_df)
+            except Exception as e:
+                affiliations_freq_df = pd.DataFrame()
+                self.logger.error(f"Error in affiliations_freq: {e}")
+            
+            try:
+                author_clusters = self.cluster_authors_by_patterns(authors_freq_df)
+            except Exception as e:
+                author_clusters = {}
+                self.logger.error(f"Error in author_clusters: {e}")
+
+            try:
+                journal_clusters = self.cluster_journals_by_impact(journals_freq_df)
+            except Exception as e:
+                journal_clusters = {}
+                self.logger.error(f"Error in journal_clusters: {e}")
+
+            try:
+                affiliation_clusters = self.cluster_affiliations_by_type(affiliations_freq_df)
+            except Exception as e:
+                affiliation_clusters = {}
+                self.logger.error(f"Error in affiliation_clusters: {e}")
+
+            try:
+                title_clusters = self.cluster_titles_by_themes(all_titles)
+            except Exception as e:
+                title_clusters = {}
+                self.logger.error(f"Error in title_clusters: {e}")
+
+            # Исправление: Безопасное суммирование
+            def safe_sum(series):
+                return pd.to_numeric(series, errors='coerce').sum()
+
+            total_debt = safe_sum(intellectual_debt_df['intellectual_debt']) if not intellectual_debt_df.empty else 0
+            avg_premium = citation_premium_df['citation_premium'].mean() if not citation_premium_df.empty else 0
+
             summary_content = f"""@MedvDmitry production
 
 REFERENCES ANALYSIS REPORT
@@ -2454,11 +3169,18 @@ Total references processed: {len(combined_df) if not combined_df.empty else 0}
 Unique references: {len(unique_df) if not unique_df.empty else 0}
 Successful references: {len(combined_df[combined_df['error'].isna()]) if not combined_df.empty else 0}
 Failed references: {len(combined_df[combined_df['error'].notna()]) if not combined_df.empty else 0}
-Unique authors: {len(self.analyze_authors_frequency(combined_df)) if not combined_df.empty else 0}
-Unique journals: {len(self.analyze_journals_frequency(combined_df)) if not combined_df.empty else 0}
-Unique affiliations: {len(self.analyze_affiliations_frequency(combined_df)) if not combined_df.empty else 0}
+Unique authors: {len(authors_freq_df) if not authors_freq_df.empty else 0}
+Unique journals: {len(journals_freq_df) if not journals_freq_df.empty else 0}
+Unique affiliations: {len(affiliations_freq_df) if not affiliations_freq_df.empty else 0}
 Unique countries: {len(self.analyze_countries_frequency(combined_df)) if not combined_df.empty else 0}
 Duplicate references: {len(duplicate_df) if not duplicate_df.empty else 0}
+
+ADVANCED METRICS
+================
+Citation Half-Life: {citation_half_life if citation_half_life else 'N/A'} years
+Echo Chamber Index: {echo_chamber_index:.3f} (0 = open, 1 = closed)
+Total Intellectual Debt: {total_debt:.1f}
+Average Citation Premium: {avg_premium:.2f}x
 
 DATA COMPLETENESS
 =================
@@ -2509,6 +3231,19 @@ Affiliations normalized and grouped for consistent organization names
                 ('Failed_References', failed_df)
             ]
 
+            # Add new advanced analysis sheets
+            advanced_sheets = [
+                ('Citation_Half_Life_Analysis', age_dist_df),
+                ('Intellectual_Debt_Ranking', intellectual_debt_df),
+                ('Citation_Premium_Elite', citation_premium_df),
+                ('Citation_DNA_Profiles', citation_dna_df),
+                ('Journal_Citation_Flows', journal_flow_df),
+                ('Publisher_Citation_Flows', publisher_flow_df),
+                ('Country_Citation_Flows', country_flow_df)
+            ]
+
+            sheets_data.extend(advanced_sheets)
+
             analysis_methods = [
                 ('Author_Frequency', self.analyze_authors_frequency),
                 ('Journal_Frequency', self.analyze_journals_frequency),
@@ -2524,6 +3259,16 @@ Affiliations normalized and grouped for consistent organization names
                     sheets_data.append((sheet_name, result_df))
                 except Exception as e:
                     sheets_data.append((sheet_name, pd.DataFrame()))
+
+            # Add clustering results
+            clustering_sheets = [
+                ('Author_Clusters', self._clusters_to_dataframe(author_clusters)),
+                ('Journal_Clusters', self._clusters_to_dataframe(journal_clusters)),
+                ('Affiliation_Clusters', self._clusters_to_dataframe(affiliation_clusters)),
+                ('Title_Theme_Clusters', self._title_clusters_to_dataframe(title_clusters))
+            ]
+            
+            sheets_data.extend(clustering_sheets)
 
             try:
                 title_word_data = []
@@ -2572,7 +3317,7 @@ Affiliations normalized and grouped for consistent organization names
                 return "error_creating_references_report"
 
 # =============================================
-# STREAMLIT INTERFACE
+# STREAMLIT INTERFACE (UPDATED)
 # =============================================
 
 def main():
@@ -2597,7 +3342,7 @@ def main():
         st.sidebar.success("Cache cleared!")
     
     # Main tabs
-    tab1, tab2 = st.tabs(["References Analysis", "Citing Articles Analysis"])
+    tab1, tab2, tab3 = st.tabs(["References Analysis", "Citing Articles Analysis", "Advanced Analytics"])
     
     with tab1:
         st.header("References Analysis")
@@ -2626,6 +3371,14 @@ def main():
                         status_text.text("Starting sequential processing for references analysis...")
                         combined_references_df, source_articles_df, total_references, unique_dois, all_titles = st.session_state.analyzer.process_doi_sequential(doi_list)
                         
+                        # Сохранение в session_state для Advanced Analytics
+                        st.session_state.combined_df = combined_references_df
+                        st.session_state.source_articles_df = source_articles_df
+                        st.session_state.all_titles = all_titles
+                        st.session_state.doi_list = doi_list
+                        st.session_state.total_references = total_references
+                        st.session_state.unique_dois = unique_dois
+                        
                         main_progress.progress(1.0)
                         status_text.text("Analysis complete! Generating report...")
                         
@@ -2639,6 +3392,16 @@ def main():
                             st.metric("Unique DOIs", unique_dois)
                         with col3:
                             st.metric("Processed References", len(combined_references_df) if not combined_references_df.empty else 0)
+                        
+                        # Show advanced metrics
+                        citation_half_life, _ = st.session_state.analyzer.calculate_citation_half_life(combined_references_df)
+                        echo_chamber_index = st.session_state.analyzer.calculate_echo_chamber_index(combined_references_df)
+                        
+                        col4, col5 = st.columns(2)
+                        with col4:
+                            st.metric("Citation Half-Life", f"{citation_half_life} years" if citation_half_life else "N/A")
+                        with col5:
+                            st.metric("Echo Chamber Index", f"{echo_chamber_index:.3f}")
                         
                         # Show source articles
                         if not source_articles_df.empty:
@@ -2727,6 +3490,16 @@ def main():
                             with col3:
                                 st.metric("Unique Citing Articles", total_unique_citations)
                             
+                            # Advanced metrics
+                            citation_half_life, _ = st.session_state.analyzer.calculate_citation_half_life(citing_articles_df)
+                            echo_chamber_index = st.session_state.analyzer.calculate_echo_chamber_index(citing_articles_df)
+                            
+                            col4, col5 = st.columns(2)
+                            with col4:
+                                st.metric("Citation Half-Life", f"{citation_half_life} years" if citation_half_life else "N/A")
+                            with col5:
+                                st.metric("Echo Chamber Index", f"{echo_chamber_index:.3f}")
+                            
                             st.subheader("Citations per Source Article")
                             for doi, data in citing_results.items():
                                 st.write(f"- **{doi}**: {data['count']} citations")
@@ -2768,6 +3541,77 @@ def main():
                     st.error("No valid DOIs found. Please check your input.")
             else:
                 st.warning("Please enter at least one DOI")
+
+    with tab3:
+        st.header("Advanced Analytics Dashboard")
+        st.write("Advanced citation intelligence and clustering analysis")
+        
+        if 'combined_df' not in st.session_state or st.session_state.combined_df.empty:
+            st.info("Please run a References Analysis first to enable advanced analytics.")
+        else:
+            combined_df = st.session_state.combined_df
+            all_titles = st.session_state.all_titles if 'all_titles' in st.session_state else []
+            
+            st.subheader("Citation Cartography")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if st.button("Journal Citation Flows"):
+                    journal_flow_df = st.session_state.analyzer.build_citation_flow_network(combined_df, 'journal')
+                    if not journal_flow_df.empty:
+                        st.dataframe(journal_flow_df.head(20))
+                    else:
+                        st.info("No journal citation flow data available")
+            
+            with col2:
+                if st.button("Publisher Citation Flows"):
+                    publisher_flow_df = st.session_state.analyzer.build_citation_flow_network(combined_df, 'publisher')
+                    if not publisher_flow_df.empty:
+                        st.dataframe(publisher_flow_df.head(20))
+                    else:
+                        st.info("No publisher citation flow data available")
+            
+            with col3:
+                if st.button("Country Citation Flows"):
+                    country_flow_df = st.session_state.analyzer.build_citation_flow_network(combined_df, 'country')
+                    if not country_flow_df.empty:
+                        st.dataframe(country_flow_df.head(20))
+                    else:
+                        st.info("No country citation flow data available")
+            
+            st.subheader("Clustering Analysis")
+            col4, col5, col6, col7 = st.columns(4)
+            
+            with col4:
+                if st.button("Author Clusters"):
+                    authors_freq_df = st.session_state.analyzer.analyze_authors_frequency(combined_df)
+                    author_clusters = st.session_state.analyzer.cluster_authors_by_patterns(authors_freq_df)
+                    for cluster_name, cluster_info in author_clusters.items():
+                        with st.expander(f"{cluster_name} ({len(cluster_info.get('authors', []))} authors)"):
+                            st.write(cluster_info.get('description', ''))
+            
+            with col5:
+                if st.button("Journal Clusters"):
+                    journals_freq_df = st.session_state.analyzer.analyze_journals_frequency(combined_df)
+                    journal_clusters = st.session_state.analyzer.cluster_journals_by_impact(journals_freq_df)
+                    for cluster_name, cluster_info in journal_clusters.items():
+                        with st.expander(f"{cluster_name} ({len(cluster_info.get('journals', []))} journals)"):
+                            st.write(cluster_info.get('description', ''))
+            
+            with col6:
+                if st.button("Affiliation Clusters"):
+                    affiliations_freq_df = st.session_state.analyzer.analyze_affiliations_frequency(combined_df)
+                    affiliation_clusters = st.session_state.analyzer.cluster_affiliations_by_type(affiliations_freq_df)
+                    for cluster_name, cluster_info in affiliation_clusters.items():
+                        with st.expander(f"{cluster_name} ({len(cluster_info.get('affiliations', []))} affiliations)"):
+                            st.write(cluster_info.get('description', ''))
+            
+            with col7:
+                if st.button("Title Theme Clusters"):
+                    title_clusters = st.session_state.analyzer.cluster_titles_by_themes(all_titles)
+                    for theme, cluster_info in title_clusters.items():
+                        with st.expander(f"{theme} ({len(cluster_info.get('titles', []))} titles)"):
+                            st.write(f"Keywords: {', '.join(cluster_info.get('keywords', []))}")
 
 if __name__ == "__main__":
     main()
