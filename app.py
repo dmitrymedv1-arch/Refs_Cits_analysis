@@ -3456,72 +3456,73 @@ def main():
             if st.button("Initialize Advanced Analytics"):
                 st.session_state.advanced_analytics_ready = True
 
-            if st.session_state.get('advanced_analytics_ready'):
+                if st.session_state.get('advanced_analytics_ready'):
             
-            st.subheader("Citation Cartography")
-            col1, col2, col3 = st.columns(3)
+                st.subheader("Citation Cartography")
+                col1, col2, col3 = st.columns(3)
             
-            with col1:
-                if st.button("Journal Citation Flows"):
-                    journal_flow_df = st.session_state.analyzer.build_citation_flow_network(combined_df, 'journal')
-                    if not journal_flow_df.empty:
-                        st.dataframe(journal_flow_df.head(20))
-                    else:
-                        st.info("No journal citation flow data available")
+                with col1:
+                    if st.button("Journal Citation Flows"):
+                        journal_flow_df = st.session_state.analyzer.build_citation_flow_network(combined_df, 'journal')
+                        if not journal_flow_df.empty:
+                            st.dataframe(journal_flow_df.head(20))
+                        else:
+                            st.info("No journal citation flow data available")
             
-            with col2:
-                if st.button("Publisher Citation Flows"):
-                    publisher_flow_df = st.session_state.analyzer.build_citation_flow_network(combined_df, 'publisher')
-                    if not publisher_flow_df.empty:
-                        st.dataframe(publisher_flow_df.head(20))
-                    else:
-                        st.info("No publisher citation flow data available")
+                with col2:
+                    if st.button("Publisher Citation Flows"):
+                        publisher_flow_df = st.session_state.analyzer.build_citation_flow_network(combined_df, 'publisher')
+                        if not publisher_flow_df.empty:
+                            st.dataframe(publisher_flow_df.head(20))
+                        else:
+                            st.info("No publisher citation flow data available")
             
-            with col3:
-                if st.button("Country Citation Flows"):
-                    country_flow_df = st.session_state.analyzer.build_citation_flow_network(combined_df, 'country')
-                    if not country_flow_df.empty:
-                        st.dataframe(country_flow_df.head(20))
-                    else:
-                        st.info("No country citation flow data available")
+                with col3:
+                    if st.button("Country Citation Flows"):
+                        country_flow_df = st.session_state.analyzer.build_citation_flow_network(combined_df, 'country')
+                        if not country_flow_df.empty:
+                            st.dataframe(country_flow_df.head(20))
+                        else:
+                            st.info("No country citation flow data available")
             
-            st.subheader("Clustering Analysis")
-            col4, col5, col6, col7 = st.columns(4)
+                st.subheader("Clustering Analysis")
+                col4, col5, col6, col7 = st.columns(4)
             
-            with col4:
-                if st.button("Author Clusters"):
-                    authors_freq_df = st.session_state.analyzer.analyze_authors_frequency(combined_df)
-                    author_clusters = st.session_state.analyzer.cluster_authors_by_patterns(authors_freq_df)
-                    for cluster_name, cluster_info in author_clusters.items():
-                        with st.expander(f"{cluster_name} ({len(cluster_info.get('authors', []))} authors)"):
-                            st.write(cluster_info.get('description', ''))
+                with col4:
+                    if st.button("Author Clusters"):
+                        authors_freq_df = st.session_state.analyzer.analyze_authors_frequency(combined_df)
+                        author_clusters = st.session_state.analyzer.cluster_authors_by_patterns(authors_freq_df)
+                        for cluster_name, cluster_info in author_clusters.items():
+                            with st.expander(f"{cluster_name} ({len(cluster_info.get('authors', []))} authors)"):
+                                st.write(cluster_info.get('description', ''))
             
-            with col5:
-                if st.button("Journal Clusters"):
-                    journals_freq_df = st.session_state.analyzer.analyze_journals_frequency(combined_df)
-                    journal_clusters = st.session_state.analyzer.cluster_journals_by_impact(journals_freq_df)
-                    for cluster_name, cluster_info in journal_clusters.items():
-                        with st.expander(f"{cluster_name} ({len(cluster_info.get('journals', []))} journals)"):
-                            st.write(cluster_info.get('description', ''))
+                with col5:
+                    if st.button("Journal Clusters"):
+                        journals_freq_df = st.session_state.analyzer.analyze_journals_frequency(combined_df)
+                        journal_clusters = st.session_state.analyzer.cluster_journals_by_impact(journals_freq_df)
+                        for cluster_name, cluster_info in journal_clusters.items():
+                            with st.expander(f"{cluster_name} ({len(cluster_info.get('journals', []))} journals)"):
+                                st.write(cluster_info.get('description', ''))
             
-            with col6:
-                if st.button("Affiliation Clusters"):
-                    affiliations_freq_df = st.session_state.analyzer.analyze_affiliations_frequency(combined_df)
-                    affiliation_clusters = st.session_state.analyzer.cluster_affiliations_by_type(affiliations_freq_df)
-                    for cluster_name, cluster_info in affiliation_clusters.items():
-                        with st.expander(f"{cluster_name} ({len(cluster_info.get('affiliations', []))} affiliations)"):
-                            st.write(cluster_info.get('description', ''))
+                with col6:
+                    if st.button("Affiliation Clusters"):
+                        affiliations_freq_df = st.session_state.analyzer.analyze_affiliations_frequency(combined_df)
+                        affiliation_clusters = st.session_state.analyzer.cluster_affiliations_by_type(affiliations_freq_df)
+                        for cluster_name, cluster_info in affiliation_clusters.items():
+                            with st.expander(f"{cluster_name} ({len(cluster_info.get('affiliations', []))} affiliations)"):
+                                st.write(cluster_info.get('description', ''))
             
-            with col7:
-                if st.button("Title Theme Clusters"):
-                    all_titles = st.session_state.all_titles if 'all_titles' in st.session_state else []
-                    title_clusters = st.session_state.analyzer.cluster_titles_by_themes(all_titles)
-                    for theme, cluster_info in title_clusters.items():
-                        with st.expander(f"{theme} ({len(cluster_info.get('titles', []))} titles)"):
-                            st.write(f"Keywords: {', '.join(cluster_info.get('keywords', []))}")
+                with col7:
+                    if st.button("Title Theme Clusters"):
+                        all_titles = st.session_state.all_titles if 'all_titles' in st.session_state else []
+                        title_clusters = st.session_state.analyzer.cluster_titles_by_themes(all_titles)
+                        for theme, cluster_info in title_clusters.items():
+                            with st.expander(f"{theme} ({len(cluster_info.get('titles', []))} titles)"):
+                                st.write(f"Keywords: {', '.join(cluster_info.get('keywords', []))}")
 
 if __name__ == "__main__":
     main()
+
 
 
 
