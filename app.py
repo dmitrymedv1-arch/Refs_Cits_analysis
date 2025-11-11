@@ -3453,10 +3453,10 @@ def main():
         else:
             combined_df = st.session_state.combined_df
             all_titles = st.session_state.get('all_titles', [])
-                if st.button("Initialize Advanced Analytics"):
-                    st.session_state.advanced_analytics_ready = True
+            if st.button("Initialize Advanced Analytics"):
+                st.session_state.advanced_analytics_ready = True
 
-                if st.session_state.get('advanced_analytics_ready'):
+            if st.session_state.get('advanced_analytics_ready'):
             
             st.subheader("Citation Cartography")
             col1, col2, col3 = st.columns(3)
@@ -3522,5 +3522,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
