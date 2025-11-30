@@ -3100,7 +3100,7 @@ Affiliations normalized and grouped for consistent organization names
             years_total = pd.to_numeric(citations_df['year'], errors='coerce')
             years_total = years_total[years_total.notna() & years_total.between(1900, current_year)]
             if not years_total.empty:
-                years_total = years_total.ast(int)
+                years_total = years_total.astype(int)
                 period_counts_total = pd.cut(years_total, bins=bins, labels=labels, right=False)
                 period_df_total = period_counts_total.value_counts().reset_index()
                 period_df_total.columns = ['period', 'frequency_total']
@@ -3960,3 +3960,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
