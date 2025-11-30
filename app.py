@@ -2310,9 +2310,22 @@ Affiliations normalized and grouped for consistent organization names
             unique_df = self.get_unique_references(references_df)
             total_unique = len(unique_df)
             
+            # Получаем все уникальные годы из данных
+            all_years_total = pd.to_numeric(references_df['year'], errors='coerce')
+            all_years_unique = pd.to_numeric(unique_df['year'], errors='coerce')
+            
+            # Объединяем все годы и фильтруем корректные
+            all_years = pd.concat([all_years_total, all_years_unique])
+            valid_years = all_years[all_years.notna() & all_years.between(1900, 2026)].astype(int).unique()
+            
+            if len(valid_years) == 0:
+                return pd.DataFrame(columns=['year', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique'])
+            
+            # Создаем базовый DataFrame со всеми годами
+            all_years_df = pd.DataFrame({'year': sorted(valid_years, reverse=True)})
+    
             # Обработка годов для всех ссылок
             years_total = pd.to_numeric(references_df['year'], errors='coerce')
-            # Убираем NaN значения и ограничиваем диапазон
             years_total = years_total[years_total.notna() & years_total.between(1900, 2026)]
             if not years_total.empty:
                 years_total = years_total.astype(int)
@@ -2333,23 +2346,96 @@ Affiliations normalized and grouped for consistent organization names
             else:
                 year_counts_unique = pd.DataFrame(columns=['year', 'frequency_unique', 'percentage_unique'])
     
-            # Объединяем результаты
-            if not year_counts_total.empty and not year_counts_unique.empty:
-                year_counts = year_counts_total.merge(year_counts_unique, on='year', how='outer').fillna(0)
-            elif not year_counts_total.empty:
-                year_counts = year_counts_total.copy()
-                year_counts['frequency_unique'] = 0
-                year_counts['percentage_unique'] = 0.0
-            elif not year_counts_unique.empty:
-                year_counts = year_counts_unique.copy()
-                year_counts['frequency_total'] = 0
-                year_counts['percentage_total'] = 0.0
+            # Объединяем с базовым DataFrame
+            year_df = all_years_df.copy()
+            
+            if not year_counts_total.empty:
+                year_df = year_df.merge(year_counts_total, on='year', how='left')
             else:
-                return pd.DataFrame(columns=['year', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique'])
+                year_df['frequency_total'] = 0
+                year_df['percentage_total'] = 0.0
+                
+            if not year_counts_unique.empty:
+                year_df = year_df.merge(year_counts_unique, on='year', how='left')
+            else:
+                year_df['frequency_unique'] = 0
+                year_df['percentage_unique'] = 0.0
     
-            return year_counts[['year', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique']].sort_values('year', ascending=False)
+            # Заполняем NaN значения нулями
+            year_df = year_df.fillna(0)
+            
+            return year_df[['year', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique']]
         except Exception as e:
             st.error(f"Error in analyze_year_distribution: {e}")
+            return pd.DataFrame()
+    
+    def analyze_citation_year_distribution(self, citations_df: pd.DataFrame) -> pd.DataFrame:
+        """Analysis of year distribution for citing articles (from new to old)"""
+        try:
+            if citations_df.empty:
+                return pd.DataFrame()
+    
+            total_citations = len(citations_df)
+            unique_df = self.get_unique_citations(citations_df)
+            total_unique = len(unique_df)
+            
+            # Получаем все уникальные годы из данных
+            all_years_total = pd.to_numeric(citations_df['year'], errors='coerce')
+            all_years_unique = pd.to_numeric(unique_df['year'], errors='coerce')
+            
+            # Объединяем все годы и фильтруем корректные
+            all_years = pd.concat([all_years_total, all_years_unique])
+            valid_years = all_years[all_years.notna() & all_years.between(1900, 2026)].astype(int).unique()
+            
+            if len(valid_years) == 0:
+                return pd.DataFrame(columns=['year', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique'])
+            
+            # Создаем базовый DataFrame со всеми годами
+            all_years_df = pd.DataFrame({'year': sorted(valid_years, reverse=True)})
+    
+            # Обработка годов для всех цитирований
+            years_total = pd.to_numeric(citations_df['year'], errors='coerce')
+            years_total = years_total[years_total.notna() & years_total.between(1900, 2026)]
+            if not years_total.empty:
+                years_total = years_total.astype(int)
+                year_counts_total = years_total.value_counts().reset_index()
+                year_counts_total.columns = ['year', 'frequency_total']
+                year_counts_total['percentage_total'] = round(year_counts_total['frequency_total'] / total_citations * 100, 2)
+            else:
+                year_counts_total = pd.DataFrame(columns=['year', 'frequency_total', 'percentage_total'])
+    
+            # Обработка годов для уникальных цитирований
+            years_unique = pd.to_numeric(unique_df['year'], errors='coerce')
+            years_unique = years_unique[years_unique.notna() & years_unique.between(1900, 2026)]
+            if not years_unique.empty:
+                years_unique = years_unique.astype(int)
+                year_counts_unique = years_unique.value_counts().reset_index()
+                year_counts_unique.columns = ['year', 'frequency_unique']
+                year_counts_unique['percentage_unique'] = round(year_counts_unique['frequency_unique'] / total_unique * 100, 2)
+            else:
+                year_counts_unique = pd.DataFrame(columns=['year', 'frequency_unique', 'percentage_unique'])
+    
+            # Объединяем с базовым DataFrame
+            year_df = all_years_df.copy()
+            
+            if not year_counts_total.empty:
+                year_df = year_df.merge(year_counts_total, on='year', how='left')
+            else:
+                year_df['frequency_total'] = 0
+                year_df['percentage_total'] = 0.0
+                
+            if not year_counts_unique.empty:
+                year_df = year_df.merge(year_counts_unique, on='year', how='left')
+            else:
+                year_df['frequency_unique'] = 0
+                year_df['percentage_unique'] = 0.0
+    
+            # Заполняем NaN значения нулями
+            year_df = year_df.fillna(0)
+            
+            return year_df[['year', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique']]
+        except Exception as e:
+            st.error(f"Error in analyze_citation_year_distribution: {e}")
             return pd.DataFrame()
     
     def analyze_five_year_periods(self, references_df: pd.DataFrame) -> pd.DataFrame:
@@ -2950,5 +3036,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
