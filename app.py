@@ -2599,181 +2599,232 @@ Affiliations normalized and grouped for consistent organization names
             return pd.DataFrame()
 
     def preprocess_content_words(self, text: str) -> List[str]:
-        if not text or text in ['Unknown', 'Error']:
+        """Предобработка контентных слов"""
+        if not text or text in ['Unknown', 'Error', '']:
             return []
-        text = text.lower()
-        text = re.sub(r'[^a-zA-Z\s-]', ' ', text)
-        text = re.sub(r'\s+', ' ', text).strip()
-        words = text.split()
-        content_words = []
-        for word in words:
-            if '-' in word:
-                continue
-            if len(word) > 2 and word not in self.stop_words and word != 'sub':
-                stemmed_word = self.stemmer.stem(word)
-                if stemmed_word not in self.scientific_stopwords_stemmed:
-                    content_words.append(stemmed_word)
-        return content_words
+        
+        try:
+            text = str(text).lower()
+            text = re.sub(r'[^a-zA-Z\s-]', ' ', text)
+            text = re.sub(r'\s+', ' ', text).strip()
+            words = text.split()
+            content_words = []
+            
+            for word in words:
+                if '-' in word:
+                    continue
+                if len(word) > 2 and word not in self.stop_words and word != 'sub':
+                    stemmed_word = self.stemmer.stem(word)
+                    if stemmed_word not in self.scientific_stopwords_stemmed:
+                        content_words.append(stemmed_word)
+            return content_words
+        except Exception:
+            return []
 
     def extract_compound_words(self, text: str) -> List[str]:
-        if not text or text in ['Unknown', 'Error']:
+        """Извлечение составных слов"""
+        if not text or text in ['Unknown', 'Error', '']:
             return []
-        text = text.lower()
-        compound_words = re.findall(r'\b[a-z]{2,}-[a-z]{2,}(?:-[a-z]{2,})*\b', text)
-        return [word for word in compound_words if not any(part in self.stop_words for part in word.split('-'))]
+        
+        try:
+            text = str(text).lower()
+            compound_words = re.findall(r'\b[a-z]{2,}-[a-z]{2,}(?:-[a-z]{2,})*\b', text)
+            return [word for word in compound_words if not any(part in self.stop_words for part in word.split('-'))]
+        except Exception:
+            return []
 
     def extract_scientific_stopwords(self, text: str) -> List[str]:
-        if not text or text in ['Unknown', 'Error']:
+        """Извлечение научных стоп-слов"""
+        if not text or text in ['Unknown', 'Error', '']:
             return []
-        text = text.lower()
-        text = re.sub(r'[^a-zA-Z\s]', ' ', text)
-        text = re.sub(r'\s+', ' ', text).strip()
-        words = text.split()
-        scientific_words = []
-        for word in words:
-            if len(word) > 2:
-                stemmed_word = self.stemmer.stem(word)
-                if stemmed_word in self.scientific_stopwords_stemmed:
-                    for original_word in self.scientific_stopwords:
-                        if self.stemmer.stem(original_word) == stemmed_word:
-                            scientific_words.append(original_word)
-                            break
-        return scientific_words
+        
+        try:
+            text = str(text).lower()
+            text = re.sub(r'[^a-zA-Z\s]', ' ', text)
+            text = re.sub(r'\s+', ' ', text).strip()
+            words = text.split()
+            scientific_words = []
+            
+            for word in words:
+                if len(word) > 2:
+                    stemmed_word = self.stemmer.stem(word)
+                    if stemmed_word in self.scientific_stopwords_stemmed:
+                        for original_word in self.scientific_stopwords:
+                            if self.stemmer.stem(original_word) == stemmed_word:
+                                scientific_words.append(original_word)
+                                break
+            return scientific_words
+        except Exception:
+            return []
 
     def analyze_titles(self, titles: List[str]) -> tuple[Counter, Counter, Counter]:
+        """Анализ частоты слов в заголовках"""
         content_words = []
         compound_words = []
         scientific_words = []
-        valid_titles = [t for t in titles if t not in ['Unknown', 'Error']]
+        
+        # Фильтруем валидные заголовки
+        valid_titles = [t for t in titles if t and t not in ['Unknown', 'Error', '']]
+        
+        if not valid_titles:
+            return Counter(), Counter(), Counter()
+        
         for title in valid_titles:
-            content_words.extend(self.preprocess_content_words(title))
-            compound_words.extend(self.extract_compound_words(title))
-            scientific_words.extend(self.extract_scientific_stopwords(title))
+            try:
+                content_words.extend(self.preprocess_content_words(title))
+                compound_words.extend(self.extract_compound_words(title))
+                scientific_words.extend(self.extract_scientific_stopwords(title))
+            except Exception as e:
+                continue  # Пропускаем заголовки с ошибками обработки
+        
         return Counter(content_words), Counter(compound_words), Counter(scientific_words)
 
     def save_all_data_to_excel(self, combined_df: pd.DataFrame, source_articles_df: pd.DataFrame,
-                         doi_list: List[str], total_references: int, unique_dois: int,
-                         all_titles: List[str]) -> str:
-        """Saves references analysis to Excel"""
+                             doi_list: List[str], total_references: int, unique_dois: int,
+                             all_titles: List[str]) -> str:
+        """Saves references analysis to Excel with comprehensive error handling"""
         try:
             timestamp = int(time.time())
-            temp_dir = tempfile.mkdtemp()
-
             excel_path = os.path.join(tempfile.gettempdir(), f"references_analysis_results_{timestamp}.xlsx")
             wb = Workbook()
-
-            # First create Report_Summary tab
-            ws_summary = wb.active
-            ws_summary.title = 'Report_Summary'
-
+    
+            # Remove default sheet and create summary first
             wb.remove(wb.active)
-
+    
+            # Initialize variables with safe defaults
+            unique_df = pd.DataFrame()
+            duplicate_df = pd.DataFrame()
+            failed_df = pd.DataFrame()
+            stats = self.performance_monitor.get_stats()
+    
+            # Get analysis data with error handling
             try:
                 unique_df = self.get_unique_references(combined_df)
             except Exception as e:
-                unique_df = pd.DataFrame()
-
+                st.warning(f"Could not get unique references: {e}")
+    
             try:
                 duplicate_df = self.find_duplicate_references(combined_df)
             except Exception as e:
-                duplicate_df = pd.DataFrame()
-
+                st.warning(f"Could not find duplicate references: {e}")
+    
             try:
-                failed_df = combined_df[combined_df['error'].notna()][['source_doi', 'position', 'doi', 'error']].copy()
-                failed_df.columns = ['source_doi', 'ref_number', 'reference_doi', 'error_description']
+                if not combined_df.empty and 'error' in combined_df.columns:
+                    failed_refs = combined_df[combined_df['error'].notna()]
+                    if not failed_refs.empty:
+                        failed_df = failed_refs[['source_doi', 'position', 'doi', 'error']].copy()
+                        failed_df.columns = ['source_doi', 'ref_number', 'reference_doi', 'error_description']
             except Exception as e:
-                failed_df = pd.DataFrame()
-
-            stats = self.performance_monitor.get_stats()
-
-            try:
-                content_freq, compound_freq, scientific_freq = self.analyze_titles(all_titles)
-            except Exception as e:
-                content_freq, compound_freq, scientific_freq = Counter(), Counter(), Counter()
-
+                st.warning(f"Could not create failed references: {e}")
+    
+            # Calculate statistics with error handling
             try:
                 total_processed = len(combined_df) if not combined_df.empty else 0
-
-                countries_with_data = combined_df[combined_df['countries'].isin(['Unknown', 'Error']) == False]
-                countries_percentage = (len(countries_with_data) / total_processed * 100) if total_processed > 0 else 0
-
-                affiliations_with_data = combined_df[combined_df['affiliations'].isin(['Unknown', 'Error']) == False]
-                affiliations_percentage = (len(affiliations_with_data) / total_processed * 100) if total_processed > 0 else 0
-
+                
+                countries_with_data = 0
+                affiliations_with_data = 0
+                
+                if not combined_df.empty:
+                    if 'countries' in combined_df.columns:
+                        countries_with_data = len(combined_df[~combined_df['countries'].isin(['Unknown', 'Error', '']) & combined_df['countries'].notna()])
+                    if 'affiliations' in combined_df.columns:
+                        affiliations_with_data = len(combined_df[~combined_df['affiliations'].isin(['Unknown', 'Error', '']) & combined_df['affiliations'].notna()])
+                
+                countries_percentage = (countries_with_data / total_processed * 100) if total_processed > 0 else 0
+                affiliations_percentage = (affiliations_with_data / total_processed * 100) if total_processed > 0 else 0
+    
             except Exception as e:
                 countries_percentage = 0
                 affiliations_percentage = 0
-
+                st.warning(f"Error calculating statistics: {e}")
+    
+            # Create comprehensive summary
             summary_content = f"""@MedvDmitry production
-
-REFERENCES ANALYSIS REPORT
-
-Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-ANALYSIS OVERVIEW
-=================
-Total source articles: {len(doi_list)}
-Total references collected: {total_references}
-Unique DOIs identified: {unique_dois}
-Total references processed: {len(combined_df) if not combined_df.empty else 0}
-Unique references: {len(unique_df) if not unique_df.empty else 0}
-Successful references: {len(combined_df[combined_df['error'].isna()]) if not combined_df.empty else 0}
-Failed references: {len(combined_df[combined_df['error'].notna()]) if not combined_df.empty else 0}
-Unique authors: {len(self.analyze_authors_frequency(combined_df)) if not combined_df.empty else 0}
-Unique journals: {len(self.analyze_journals_frequency(combined_df)) if not combined_df.empty else 0}
-Unique affiliations: {len(self.analyze_affiliations_frequency(combined_df)) if not combined_df.empty else 0}
-Unique countries: {len(self.analyze_countries_frequency(combined_df)) if not combined_df.empty else 0}
-Duplicate references: {len(duplicate_df) if not duplicate_df.empty else 0}
-
-DATA COMPLETENESS
-=================
-References with country data: {countries_percentage:.1f}%
-References with affiliation data: {affiliations_percentage:.1f}%
-
-AFFILIATION PROCESSING
-======================
-Affiliations normalized and grouped by organization
-Similar affiliations merged together
-Frequency counts reflect grouped organizations
-
-PERFORMANCE STATISTICS
-======================
-Total processing time: {stats.get('elapsed_seconds', 0):.2f} seconds ({stats.get('elapsed_minutes', 0):.2f} minutes)
-Total API requests: {stats.get('total_requests', 0)}
-Requests per second: {stats.get('requests_per_second', 0):.2f}
-
-DATA QUALITY NOTES
-==================
-Analysis focuses on references cited by the source articles
-Combined data from Crossref and OpenAlex improves completeness
-All standard statistical analyses performed (authors, journals, countries, etc.)
-Error handling ensures report generation even with partial data
-Affiliations normalized and grouped for consistent organization names
-"""
-
-            # Create Report_Summary tab first
+    
+    REFERENCES ANALYSIS REPORT
+    
+    Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+    
+    ANALYSIS OVERVIEW
+    =================
+    Total source articles: {len(doi_list)}
+    Total references collected: {total_references}
+    Unique DOIs identified: {unique_dois}
+    Total references processed: {len(combined_df) if not combined_df.empty else 0}
+    Unique references: {len(unique_df) if not unique_df.empty else 0}
+    Successful references: {len(combined_df[combined_df['error'].isna()]) if not combined_df.empty and 'error' in combined_df.columns else len(combined_df) if not combined_df.empty else 0}
+    Failed references: {len(failed_df) if not failed_df.empty else 0}
+    Duplicate references: {len(duplicate_df) if not duplicate_df.empty else 0}
+    
+    DATA COMPLETENESS
+    =================
+    References with country data: {countries_percentage:.1f}%
+    References with affiliation data: {affiliations_percentage:.1f}%
+    
+    AFFILIATION PROCESSING
+    ======================
+    Affiliations normalized and grouped by organization
+    Similar affiliations merged together
+    Frequency counts reflect grouped organizations
+    
+    PERFORMANCE STATISTICS
+    ======================
+    Total processing time: {stats.get('elapsed_seconds', 0):.2f} seconds ({stats.get('elapsed_minutes', 0):.2f} minutes)
+    Total API requests: {stats.get('total_requests', 0)}
+    Requests per second: {stats.get('requests_per_second', 0):.2f}
+    
+    SOURCE ARTICLES ANALYZED
+    ========================
+    {chr(10).join(f"- {doi}" for doi in doi_list[:10])}
+    {'...' if len(doi_list) > 10 else ''}
+    
+    DATA QUALITY NOTES
+    ==================
+    Analysis focuses on references cited by the source articles
+    Combined data from Crossref and OpenAlex improves completeness
+    All standard statistical analyses performed (authors, journals, countries, etc.)
+    Error handling ensures report generation even with partial data
+    Affiliations normalized and grouped for consistent organization names
+    """
+    
+            # Create Report_Summary sheet
             ws_summary = wb.create_sheet('Report_Summary')
             for line in summary_content.split('\n'):
                 ws_summary.append([line])
-
-            # Remove authors_surnames column and add author_count for main tables
-            if not source_articles_df.empty and 'authors_surnames' in source_articles_df.columns:
-                source_articles_df = source_articles_df.drop(columns=['authors_surnames'])
-            if not combined_df.empty and 'authors_surnames' in combined_df.columns:
-                combined_df = combined_df.drop(columns=['authors_surnames'])
-            if not unique_df.empty and 'authors_surnames' in unique_df.columns:
-                unique_df = unique_df.drop(columns=['authors_surnames'])
-            if not duplicate_df.empty and 'authors_surnames' in duplicate_df.columns:
-                duplicate_df = duplicate_df.drop(columns=['authors_surnames'])
-
-            sheets_data = [
+    
+            # Prepare main data sheets
+            sheets_data = []
+    
+            # Clean up column names for main tables
+            def clean_dataframe(df):
+                if df.empty:
+                    return df
+                # Remove authors_surnames if exists
+                if 'authors_surnames' in df.columns:
+                    df = df.drop(columns=['authors_surnames'])
+                # Ensure all columns are strings to avoid encoding issues
+                for col in df.columns:
+                    df[col] = df[col].astype(str)
+                return df
+    
+            # Add main data sheets
+            main_sheets = [
                 ('Source_Articles', source_articles_df),
                 ('All_References', combined_df),
                 ('All_Unique_References', unique_df),
                 ('Duplicate_References', duplicate_df),
                 ('Failed_References', failed_df)
             ]
-
+    
+            for sheet_name, df in main_sheets:
+                try:
+                    cleaned_df = clean_dataframe(df.copy() if not df.empty else df)
+                    sheets_data.append((sheet_name, cleaned_df))
+                except Exception as e:
+                    st.warning(f"Error preparing {sheet_name}: {e}")
+                    sheets_data.append((sheet_name, pd.DataFrame()))
+    
+            # Add analysis sheets with comprehensive error handling
             analysis_methods = [
                 ('Author_Frequency', self.analyze_authors_frequency),
                 ('Journal_Frequency', self.analyze_journals_frequency),
@@ -2782,59 +2833,159 @@ Affiliations normalized and grouped for consistent organization names
                 ('Year_Distribution', self.analyze_year_distribution),
                 ('5_Years_Period', self.analyze_five_year_periods)
             ]
-
+    
             for sheet_name, method in analysis_methods:
                 try:
-                    result_df = method(combined_df)
-                    sheets_data.append((sheet_name, result_df))
+                    if not combined_df.empty:
+                        result_df = method(combined_df)
+                        if not result_df.empty:
+                            sheets_data.append((sheet_name, result_df))
+                        else:
+                            # Create empty sheet with message
+                            empty_df = pd.DataFrame([{'Message': f'No data available for {sheet_name}'}])
+                            sheets_data.append((sheet_name, empty_df))
+                    else:
+                        empty_df = pd.DataFrame([{'Message': 'No reference data available for analysis'}])
+                        sheets_data.append((sheet_name, empty_df))
                 except Exception as e:
-                    sheets_data.append((sheet_name, pd.DataFrame()))
-
+                    st.warning(f"Error in {sheet_name} analysis: {e}")
+                    error_df = pd.DataFrame([{'Error': f'Analysis failed: {str(e)}'}])
+                    sheets_data.append((sheet_name, error_df))
+    
+            # Add title word frequency analysis
             try:
+                content_freq, compound_freq, scientific_freq = self.analyze_titles(all_titles)
+                
                 title_word_data = []
-                for i, (word, count) in enumerate(content_freq.most_common(50), 1):
-                    title_word_data.append({'Category': 'Content_Words', 'Rank': i, 'Word': word, 'Frequency': count})
-                for i, (word, count) in enumerate(compound_freq.most_common(50), 1):
-                    title_word_data.append({'Category': 'Compound_Words', 'Rank': i, 'Word': word, 'Frequency': count})
-                for i, (word, count) in enumerate(scientific_freq.most_common(50), 1):
-                    title_word_data.append({'Category': 'Scientific_Stopwords', 'Rank': i, 'Word': word, 'Frequency': count})
-
+                
+                # Add content words
+                if content_freq:
+                    for i, (word, count) in enumerate(content_freq.most_common(50), 1):
+                        title_word_data.append({
+                            'Category': 'Content_Words', 
+                            'Rank': i, 
+                            'Word': word, 
+                            'Frequency': count
+                        })
+                else:
+                    title_word_data.append({
+                        'Category': 'Content_Words', 
+                        'Rank': 1, 
+                        'Word': 'No content words found', 
+                        'Frequency': 0
+                    })
+                
+                # Add compound words
+                if compound_freq:
+                    for i, (word, count) in enumerate(compound_freq.most_common(50), 1):
+                        title_word_data.append({
+                            'Category': 'Compound_Words', 
+                            'Rank': i, 
+                            'Word': word, 
+                            'Frequency': count
+                        })
+                else:
+                    title_word_data.append({
+                        'Category': 'Compound_Words', 
+                        'Rank': 1, 
+                        'Word': 'No compound words found', 
+                        'Frequency': 0
+                    })
+                
+                # Add scientific stopwords
+                if scientific_freq:
+                    for i, (word, count) in enumerate(scientific_freq.most_common(50), 1):
+                        title_word_data.append({
+                            'Category': 'Scientific_Stopwords', 
+                            'Rank': i, 
+                            'Word': word, 
+                            'Frequency': count
+                        })
+                else:
+                    title_word_data.append({
+                        'Category': 'Scientific_Stopwords', 
+                        'Rank': 1, 
+                        'Word': 'No scientific stopwords found', 
+                        'Frequency': 0
+                    })
+    
                 title_word_df = pd.DataFrame(title_word_data)
                 sheets_data.append(('Title_Word_Frequency', title_word_df))
+                
             except Exception as e:
-                sheets_data.append(('Title_Word_Frequency', pd.DataFrame()))
-
+                st.warning(f"Error creating title word frequency: {e}")
+                error_df = pd.DataFrame([{
+                    'Error': f'Could not analyze title words: {str(e)}'
+                }])
+                sheets_data.append(('Title_Word_Frequency', error_df))
+    
+            # Create all sheets in Excel
             for sheet_name, df in sheets_data:
                 try:
-                    if not df.empty:
-                        ws = wb.create_sheet(sheet_name)
-                        for r in dataframe_to_rows(df, index=False, header=True):
-                            ws.append(r)
-                    else:
-                        ws = wb.create_sheet(sheet_name)
+                    ws = wb.create_sheet(sheet_name)
+                    
+                    if df.empty:
                         ws.append([f"No data available for {sheet_name}"])
+                        continue
+                    
+                    # Convert DataFrame to rows and write to sheet
+                    for r in dataframe_to_rows(df, index=False, header=True):
+                        # Clean any problematic characters in cells
+                        cleaned_row = []
+                        for cell in r:
+                            if cell is None:
+                                cleaned_row.append('')
+                            else:
+                                # Convert to string and remove problematic characters
+                                cleaned_cell = str(cell).encode('ascii', 'ignore').decode('ascii')
+                                cleaned_row.append(cleaned_cell)
+                        ws.append(cleaned_row)
+                        
                 except Exception as e:
-                    pass
-
-            wb.save(excel_path)
-
-            return excel_path
-
-        except Exception as e:
+                    st.warning(f"Error creating sheet {sheet_name}: {e}")
+                    # Create minimal error sheet
+                    try:
+                        ws = wb.create_sheet(sheet_name)
+                        ws.append([f"Error creating sheet: {str(e)}"])
+                    except:
+                        pass  # If we can't even create the error sheet, skip it
+    
+            # Save the workbook
             try:
-                timestamp = int(time.time())
-                excel_path = os.path.join(tempfile.gettempdir(), f"minimal_references_analysis_results_{timestamp}.xlsx")
-                wb = Workbook()
-                ws = wb.active
-                ws.title = "Error_Report_References"
-                ws.append(["ERROR REPORT - REFERENCES ANALYSIS"])
-                ws.append([f"Critical error during references analysis: {str(e)}"])
-                ws.append([f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"])
-                ws.append(["DOIs processed:", ', '.join(doi_list)])
                 wb.save(excel_path)
+                st.success(f"Excel report successfully created: {os.path.basename(excel_path)}")
                 return excel_path
+                
+            except Exception as e:
+                st.error(f"Error saving Excel file: {e}")
+                # Try to save a minimal version
+                try:
+                    minimal_path = os.path.join(tempfile.gettempdir(), f"minimal_report_{timestamp}.xlsx")
+                    minimal_wb = Workbook()
+                    ws = minimal_wb.active
+                    ws.title = "Error_Report"
+                    ws.append(["MINIMAL REPORT - DATA EXPORT ERROR"])
+                    ws.append([f"Original error: {str(e)}"])
+                    ws.append([f"DOIs processed: {len(doi_list)}"])
+                    ws.append([f"References found: {total_references}"])
+                    minimal_wb.save(minimal_path)
+                    return minimal_path
+                except:
+                    return "error_creating_excel_report"
+    
+        except Exception as e:
+            st.error(f"Critical error in save_all_data_to_excel: {e}")
+            try:
+                # Last resort - create a very basic error file
+                error_path = os.path.join(tempfile.gettempdir(), f"error_report_{timestamp}.txt")
+                with open(error_path, 'w', encoding='utf-8') as f:
+                    f.write(f"ERROR REPORT\n")
+                    f.write(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"Error: {str(e)}\n")
+                    f.write(f"DOIs: {doi_list}\n")
+                return error_path
             except:
-                return "error_creating_references_report"
+                return "complete_export_failure"
 
 # =============================================
 # STREAMLIT INTERFACE
@@ -3036,6 +3187,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
