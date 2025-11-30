@@ -2752,8 +2752,8 @@ Affiliations normalized and grouped for consistent organization names
 
     def save_all_data_to_excel(self, combined_df: pd.DataFrame, source_articles_df: pd.DataFrame,
                          doi_list: List[str], total_references: int, unique_dois: int,
-                         all_titles: List[str], ethics_results: Dict = None) -> BytesIO:
-        """Сохраняет полный анализ references в Excel с комплексной обработкой ошибок"""
+                         all_titles: List[str], ethics_results: Dict = None) -> str:
+        """Сохраняет полный анализ references в Excel и возвращает путь к файлу"""
         
         def safe_dataframe_creation(data, columns=None):
             """Безопасное создание DataFrame с обработкой ошибок"""
@@ -2808,7 +2808,9 @@ Affiliations normalized and grouped for consistent organization names
     
         try:
             timestamp = int(time.time())
-            excel_buffer = BytesIO()
+            temp_dir = tempfile.gettempdir()
+            excel_path = os.path.join(temp_dir, f"references_analysis_results_{timestamp}.xlsx")
+    
             wb = Workbook()
     
             # Удаляем дефолтный лист
@@ -3101,16 +3103,15 @@ Affiliations normalized and grouped for consistent organization names
     
             # Сохраняем рабочую книгу
             try:
-                wb.save(excel_buffer)
-                excel_buffer.seek(0)
-                st.success("✅ Excel report successfully created!")
-                return excel_buffer
+                wb.save(excel_path)
+                st.success(f"✅ Excel report successfully created: {os.path.basename(excel_path)}")
+                return excel_path
                 
             except Exception as e:
                 st.error(f"Error saving Excel file: {e}")
                 # Пытаемся сохранить минимальную версию
                 try:
-                    minimal_buffer = BytesIO()
+                    minimal_path = os.path.join(temp_dir, f"minimal_report_{timestamp}.xlsx")
                     minimal_wb = Workbook()
                     ws = minimal_wb.active
                     ws.title = "Minimal_Report"
@@ -3119,25 +3120,24 @@ Affiliations normalized and grouped for consistent organization names
                     ws.append([f"DOIs processed: {len(doi_list)}"])
                     ws.append([f"References found: {total_references}"])
                     ws.append([f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"])
-                    minimal_wb.save(minimal_buffer)
-                    minimal_buffer.seek(0)
-                    return minimal_buffer
+                    minimal_wb.save(minimal_path)
+                    return minimal_path
                 except:
-                    error_buffer = BytesIO()
-                    error_buffer.write(b"Error creating Excel report")
-                    error_buffer.seek(0)
-                    return error_buffer
+                    return "error_creating_excel_report"
     
         except Exception as e:
             st.error(f"Critical error in save_all_data_to_excel: {e}")
             # Последняя попытка - создаем очень простой файл ошибки
             try:
-                error_buffer = BytesIO()
-                error_buffer.write(f"ERROR REPORT\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\nError: {str(e)}\nDOIs: {doi_list}".encode('utf-8'))
-                error_buffer.seek(0)
-                return error_buffer
+                error_path = os.path.join(tempfile.gettempdir(), f"error_report_{timestamp}.txt")
+                with open(error_path, 'w', encoding='utf-8') as f:
+                    f.write(f"ERROR REPORT\n")
+                    f.write(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"Error: {str(e)}\n")
+                    f.write(f"DOIs: {doi_list}\n")
+                return error_path
             except:
-                return BytesIO(b"Complete export failure")
+                return "complete_export_failure"
 
 # =============================================
 # STREAMLIT INTERFACE
@@ -3339,6 +3339,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
