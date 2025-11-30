@@ -28,6 +28,12 @@ from crossref_commons.retrieval import get_publication_as_json
 from ratelimit import limits, sleep_and_retry
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import tqdm
+import networkx as nx
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.decomposition import LatentDirichletAllocation
+from sklearn.cluster import KMeans
+import plotly.express as px
+import plotly.graph_objects as go
 
 # Ensure NLTK data is available
 try:
@@ -111,6 +117,89 @@ class PerformanceMonitor:
                 'requests_per_second': self.request_count / elapsed if elapsed > 0 else 0
             }
         return {}
+
+# =============================================
+# TOPIC ANALYZER
+# =============================================
+
+class TopicAnalyzer:
+    def __init__(self):
+        self.vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
+        self.lda_model = None
+        
+    def prepare_text_data(self, titles: List[str], abstracts: List[str] = None) -> List[str]:
+        """Подготавливает текст для анализа"""
+        texts = []
+        for i, title in enumerate(titles):
+            if title and title not in ['Unknown', 'Error', '']:
+                text = title
+                if abstracts and i < len(abstracts) and abstracts[i] and abstracts[i] not in ['Unknown', 'Error', '']:
+                    text += " " + abstracts[i]
+                texts.append(text)
+        return texts
+    
+    def perform_lda_analysis(self, texts: List[str], n_topics: int = 5) -> Dict:
+        """LDA тематическое моделирование"""
+        if not texts or len(texts) < n_topics:
+            return {
+                'topic_distributions': np.array([]),
+                'topics_keywords': {},
+                'dominant_topics': np.array([])
+            }
+        
+        try:
+            # Векторизация
+            tfidf_matrix = self.vectorizer.fit_transform(texts)
+            
+            # LDA
+            self.lda_model = LatentDirichletAllocation(
+                n_components=n_topics, 
+                random_state=42
+            )
+            lda_output = self.lda_model.fit_transform(tfidf_matrix)
+            
+            # Извлекаем ключевые слова для каждой темы
+            feature_names = self.vectorizer.get_feature_names_out()
+            topics = {}
+            
+            for topic_idx, topic in enumerate(self.lda_model.components_):
+                top_words = [feature_names[i] for i in topic.argsort()[:-10:-1]]
+                topics[f"Topic_{topic_idx}"] = top_words
+            
+            return {
+                'topic_distributions': lda_output,
+                'topics_keywords': topics,
+                'dominant_topics': lda_output.argmax(axis=1)
+            }
+        except Exception as e:
+            return {
+                'topic_distributions': np.array([]),
+                'topics_keywords': {},
+                'dominant_topics': np.array([])
+            }
+    
+    def cluster_articles_kmeans(self, texts: List[str], n_clusters: int = 5) -> Dict:
+        """Кластеризация статей по темам"""
+        if not texts or len(texts) < n_clusters:
+            return {
+                'clusters': np.array([]),
+                'cluster_centers': np.array([])
+            }
+        
+        try:
+            tfidf_matrix = self.vectorizer.fit_transform(texts)
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+            clusters = kmeans.fit_predict(tfidf_matrix)
+            
+            return {
+                'clusters': clusters,
+                'cluster_centers': kmeans.cluster_centers_
+            }
+        except Exception as e:
+            return {
+                'clusters': np.array([]),
+                'cluster_centers': np.array([])
+            }
 
 # =============================================
 # AFFILIATION PROCESSOR (CORRECTED VERSION)
@@ -415,6 +504,10 @@ class CitationAnalyzer:
             'nanostructures', 'composite', 'composites', 'coating', 'coatings'
         }
         self.scientific_stopwords_stemmed = {self.stemmer.stem(word) for word in self.scientific_stopwords}
+        self.topic_analyzer = TopicAnalyzer()
+        self.citation_network = None
+        self.coauthorship_network = None
+        self.affiliation_network = None
         self.setup_logging()
 
     def setup_logging(self):
@@ -1543,9 +1636,410 @@ class CitationAnalyzer:
             st.error(f"Error in analyze_citation_five_year_periods: {e}")
             return pd.DataFrame()
 
+    # =============================================
+    # NETWORK ANALYSIS METHODS
+    # =============================================
+
+    def build_citation_network(self, references_df: pd.DataFrame, citations_df: pd.DataFrame) -> nx.DiGraph:
+        """Строит сеть цитирований из references и citations"""
+        G = nx.DiGraph()  # Ориентированный граф
+        
+        try:
+            # Добавляем узлы - все статьи
+            all_articles = set()
+            if not references_df.empty:
+                all_articles.update(references_df['doi'].dropna())
+                all_articles.update(references_df['source_doi'].dropna())
+            if not citations_df.empty:
+                all_articles.update(citations_df['doi'].dropna())
+                all_articles.update(citations_df['source_doi'].dropna())
+            
+            for doi in all_articles:
+                if doi and doi != 'Unknown':
+                    G.add_node(doi, type='article')
+            
+            # Добавляем рёбра из references (статья → цитируемая статья)
+            if not references_df.empty:
+                for _, row in references_df.iterrows():
+                    if (row['doi'] and row['doi'] != 'Unknown' and 
+                        row['source_doi'] and row['source_doi'] != 'Unknown'):
+                        G.add_edge(row['source_doi'], row['doi'], type='cites', relationship='reference')
+            
+            # Добавляем рёбра из citations (статья → цитирующая статья)
+            if not citations_df.empty:
+                for _, row in citations_df.iterrows():
+                    if (row['doi'] and row['doi'] != 'Unknown' and 
+                        row['source_doi'] and row['source_doi'] != 'Unknown'):
+                        G.add_edge(row['doi'], row['source_doi'], type='cited_by', relationship='citation')
+            
+            self.citation_network = G
+            return G
+            
+        except Exception as e:
+            self.logger.error(f"Error building citation network: {e}")
+            return nx.DiGraph()
+
+    def build_coauthorship_network(self, articles_df: pd.DataFrame) -> nx.Graph:
+        """Строит сеть соавторства"""
+        G = nx.Graph()
+        
+        try:
+            if articles_df.empty:
+                return G
+                
+            for _, article in articles_df.iterrows():
+                if (article['authors_with_initials'] and 
+                    article['authors_with_initials'] not in ['Unknown', 'Error']):
+                    authors = [auth.strip() for auth in article['authors_with_initials'].split(',') 
+                              if auth.strip() not in ['Unknown', 'Error']]
+                    
+                    # Добавляем связи между всеми авторами статьи
+                    for i, author1 in enumerate(authors):
+                        for author2 in authors[i+1:]:
+                            if G.has_edge(author1, author2):
+                                G[author1][author2]['weight'] += 1
+                            else:
+                                G.add_edge(author1, author2, weight=1, collaboration_count=1)
+            
+            self.coauthorship_network = G
+            return G
+            
+        except Exception as e:
+            self.logger.error(f"Error building coauthorship network: {e}")
+            return nx.Graph()
+
+    def build_affiliation_network(self, articles_df: pd.DataFrame) -> nx.Graph:
+        """Строит сеть сотрудничества между организациями"""
+        G = nx.Graph()
+        
+        try:
+            if articles_df.empty:
+                return G
+                
+            for _, article in articles_df.iterrows():
+                if (article['affiliations'] and 
+                    article['affiliations'] not in ['Unknown', 'Error', '']):
+                    affiliations = [aff.strip() for aff in article['affiliations'].split(';') 
+                                  if aff.strip() not in ['Unknown', 'Error', '']]
+                    
+                    # Связываем все аффилиации одной статьи
+                    for i, aff1 in enumerate(affiliations):
+                        for aff2 in affiliations[i+1:]:
+                            if G.has_edge(aff1, aff2):
+                                G[aff1][aff2]['weight'] += 1
+                                G[aff1][aff2]['collaboration_count'] += 1
+                            else:
+                                G.add_edge(aff1, aff2, weight=1, collaboration_count=1)
+            
+            self.affiliation_network = G
+            return G
+            
+        except Exception as e:
+            self.logger.error(f"Error building affiliation network: {e}")
+            return nx.Graph()
+
+    def calculate_network_metrics(self, G: nx.Graph) -> Dict:
+        """Вычисляет метрики сети"""
+        try:
+            if len(G) == 0:
+                return {}
+                
+            metrics = {
+                'degree_centrality': nx.degree_centrality(G),
+                'betweenness_centrality': nx.betweenness_centrality(G) if len(G) > 1 else {},
+                'closeness_centrality': nx.closeness_centrality(G) if len(G) > 1 else {},
+                'pagerank': nx.pagerank(G) if len(G) > 1 else {},
+            }
+            
+            # Для неориентированных графов вычисляем компоненты связности
+            if not G.is_directed():
+                metrics['connected_components'] = list(nx.connected_components(G))
+                
+            return metrics
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating network metrics: {e}")
+            return {}
+
+    def create_topic_journal_heatmap_data(self, articles_df: pd.DataFrame, topic_analysis: Dict) -> pd.DataFrame:
+        """Создает данные для тепловой карты распределения тем по журналам"""
+        try:
+            if articles_df.empty or not topic_analysis or not topic_analysis.get('dominant_topics'):
+                return pd.DataFrame()
+                
+            heatmap_data = []
+            
+            for journal in articles_df['journal_abbreviation'].unique():
+                if journal not in ['Unknown', 'Error']:
+                    journal_articles = articles_df[articles_df['journal_abbreviation'] == journal]
+                    if len(journal_articles) > 0:
+                        # Используем индексы для сопоставления с topic_analysis
+                        journal_indices = journal_articles.index
+                        journal_topics = []
+                        
+                        for idx in journal_indices:
+                            if idx < len(topic_analysis['dominant_topics']):
+                                journal_topics.append(topic_analysis['dominant_topics'][idx])
+                        
+                        if journal_topics:
+                            topic_counts = Counter(journal_topics)
+                            total = len(journal_topics)
+                            
+                            for topic_id in range(len(topic_analysis.get('topics_keywords', {}))):
+                                count = topic_counts.get(topic_id, 0)
+                                percentage = (count / total) * 100 if total > 0 else 0
+                                
+                                heatmap_data.append({
+                                    'journal': journal,
+                                    'topic': f'Topic_{topic_id}',
+                                    'count': count,
+                                    'percentage': round(percentage, 2)
+                                })
+            
+            return pd.DataFrame(heatmap_data)
+            
+        except Exception as e:
+            self.logger.error(f"Error creating topic-journal heatmap data: {e}")
+            return pd.DataFrame()
+
+    def analyze_temporal_topic_trends(self, articles_df: pd.DataFrame, topic_analysis: Dict) -> pd.DataFrame:
+        """Анализ временных трендов тем"""
+        try:
+            if articles_df.empty or not topic_analysis or not topic_analysis.get('dominant_topics'):
+                return pd.DataFrame()
+                
+            trends_data = []
+            
+            # Фильтруем валидные годы
+            articles_df['year_numeric'] = pd.to_numeric(articles_df['year'], errors='coerce')
+            valid_years_df = articles_df[articles_df['year_numeric'].between(1900, datetime.now().year)]
+            
+            if valid_years_df.empty:
+                return pd.DataFrame()
+            
+            for year in sorted(valid_years_df['year_numeric'].unique()):
+                year_articles = valid_years_df[valid_years_df['year_numeric'] == year]
+                year_indices = year_articles.index
+                year_topics = []
+                
+                for idx in year_indices:
+                    if idx < len(topic_analysis['dominant_topics']):
+                        year_topics.append(topic_analysis['dominant_topics'][idx])
+                
+                if year_topics:
+                    topic_counts = Counter(year_topics)
+                    total = len(year_topics)
+                    
+                    for topic_id in range(len(topic_analysis.get('topics_keywords', {}))):
+                        count = topic_counts.get(topic_id, 0)
+                        percentage = (count / total) * 100 if total > 0 else 0
+                        
+                        trends_data.append({
+                            'year': int(year),
+                            'topic': f'Topic_{topic_id}',
+                            'count': count,
+                            'percentage': round(percentage, 2)
+                        })
+            
+            return pd.DataFrame(trends_data)
+            
+        except Exception as e:
+            self.logger.error(f"Error analyzing temporal topic trends: {e}")
+            return pd.DataFrame()
+
+    def perform_comprehensive_analysis(self, references_df: pd.DataFrame, 
+                                     citations_df: pd.DataFrame,
+                                     source_articles_df: pd.DataFrame) -> Dict:
+        """Выполняет комплексный анализ (сетевой и тематический)"""
+        comprehensive_results = {
+            'networks': {},
+            'metrics': {},
+            'topics': {},
+            'clustering': {},
+            'visualizations': {}
+        }
+        
+        try:
+            # 1. Строим сети
+            st.info("Building citation network...")
+            citation_network = self.build_citation_network(references_df, citations_df)
+            comprehensive_results['networks']['citation'] = citation_network
+            
+            st.info("Building coauthorship network...")
+            coauthorship_network = self.build_coauthorship_network(source_articles_df)
+            comprehensive_results['networks']['coauthorship'] = coauthorship_network
+            
+            st.info("Building affiliation network...")
+            affiliation_network = self.build_affiliation_network(source_articles_df)
+            comprehensive_results['networks']['affiliation'] = affiliation_network
+            
+            # 2. Вычисляем метрики сетей
+            st.info("Calculating network metrics...")
+            comprehensive_results['metrics']['citation'] = self.calculate_network_metrics(citation_network)
+            comprehensive_results['metrics']['coauthorship'] = self.calculate_network_metrics(coauthorship_network)
+            comprehensive_results['metrics']['affiliation'] = self.calculate_network_metrics(affiliation_network)
+            
+            # 3. Тематический анализ
+            st.info("Performing topic analysis...")
+            all_titles = []
+            if not references_df.empty:
+                all_titles.extend([title for title in references_df['title'] if title not in ['Unknown', 'Error']])
+            if not citations_df.empty:
+                all_titles.extend([title for title in citations_df['title'] if title not in ['Unknown', 'Error']])
+            
+            if all_titles:
+                texts = self.topic_analyzer.prepare_text_data(all_titles)
+                topic_analysis = self.topic_analyzer.perform_lda_analysis(texts)
+                clustering = self.topic_analyzer.cluster_articles_kmeans(texts)
+                
+                comprehensive_results['topics'] = topic_analysis
+                comprehensive_results['clustering'] = clustering
+                
+                # 4. Тепловые карты и тренды
+                st.info("Generating visualizations...")
+                all_articles_df = pd.concat([references_df, citations_df], ignore_index=True)
+                
+                topic_journal_heatmap = self.create_topic_journal_heatmap_data(all_articles_df, topic_analysis)
+                comprehensive_results['visualizations']['topic_journal_heatmap'] = topic_journal_heatmap
+                
+                temporal_trends = self.analyze_temporal_topic_trends(all_articles_df, topic_analysis)
+                comprehensive_results['visualizations']['temporal_trends'] = temporal_trends
+            
+            st.success("Comprehensive analysis completed!")
+            
+        except Exception as e:
+            self.logger.error(f"Error in comprehensive analysis: {e}")
+            st.error(f"Comprehensive analysis partially failed: {e}")
+        
+        return comprehensive_results
+
+    def _prepare_network_metrics_data(self, comprehensive_results: Dict) -> pd.DataFrame:
+        """Подготавливает данные метрик сети для Excel"""
+        try:
+            metrics_data = []
+            
+            # Citation network metrics
+            citation_metrics = comprehensive_results.get('metrics', {}).get('citation', {})
+            for node, metrics in citation_metrics.items():
+                if isinstance(metrics, dict):
+                    for metric_name, value in metrics.items():
+                        if isinstance(value, (int, float)):
+                            metrics_data.append({
+                                'network_type': 'citation',
+                                'node': node,
+                                'metric': metric_name,
+                                'value': round(value, 4)
+                            })
+            
+            # Coauthorship network metrics
+            coauthorship_metrics = comprehensive_results.get('metrics', {}).get('coauthorship', {})
+            for node, metrics in coauthorship_metrics.items():
+                if isinstance(metrics, dict):
+                    for metric_name, value in metrics.items():
+                        if isinstance(value, (int, float)):
+                            metrics_data.append({
+                                'network_type': 'coauthorship',
+                                'node': node,
+                                'metric': metric_name,
+                                'value': round(value, 4)
+                            })
+            
+            return pd.DataFrame(metrics_data)
+            
+        except Exception as e:
+            self.logger.error(f"Error preparing network metrics data: {e}")
+            return pd.DataFrame()
+
+    def _prepare_coauthorship_data(self, comprehensive_results: Dict) -> pd.DataFrame:
+        """Подготавливает данные сети соавторства для Excel"""
+        try:
+            coauthorship_data = []
+            network = comprehensive_results.get('networks', {}).get('coauthorship')
+            
+            if network and len(network) > 0:
+                for edge in network.edges(data=True):
+                    coauthorship_data.append({
+                        'author_1': edge[0],
+                        'author_2': edge[1],
+                        'collaboration_count': edge[2].get('weight', 1),
+                        'edge_weight': edge[2].get('weight', 1)
+                    })
+            
+            return pd.DataFrame(coauthorship_data)
+            
+        except Exception as e:
+            self.logger.error(f"Error preparing coauthorship data: {e}")
+            return pd.DataFrame()
+
+    def _prepare_affiliation_data(self, comprehensive_results: Dict) -> pd.DataFrame:
+        """Подготавливает данные сети аффилиаций для Excel"""
+        try:
+            affiliation_data = []
+            network = comprehensive_results.get('networks', {}).get('affiliation')
+            
+            if network and len(network) > 0:
+                for edge in network.edges(data=True):
+                    affiliation_data.append({
+                        'affiliation_1': edge[0],
+                        'affiliation_2': edge[1],
+                        'collaboration_count': edge[2].get('weight', 1),
+                        'edge_weight': edge[2].get('weight', 1)
+                    })
+            
+            return pd.DataFrame(affiliation_data)
+            
+        except Exception as e:
+            self.logger.error(f"Error preparing affiliation data: {e}")
+            return pd.DataFrame()
+
+    def _prepare_lda_topics_data(self, comprehensive_results: Dict) -> pd.DataFrame:
+        """Подготавливает данные LDA тем для Excel"""
+        try:
+            topics_data = []
+            topics = comprehensive_results.get('topics', {}).get('topics_keywords', {})
+            
+            for topic_name, keywords in topics.items():
+                topics_data.append({
+                    'topic': topic_name,
+                    'keywords': ', '.join(keywords),
+                    'keyword_count': len(keywords)
+                })
+            
+            return pd.DataFrame(topics_data)
+            
+        except Exception as e:
+            self.logger.error(f"Error preparing LDA topics data: {e}")
+            return pd.DataFrame()
+
+    def _prepare_topic_distribution_data(self, articles_df: pd.DataFrame, comprehensive_results: Dict) -> pd.DataFrame:
+        """Подготавливает данные распределения тем по статьям для Excel"""
+        try:
+            if articles_df.empty:
+                return pd.DataFrame()
+                
+            distribution_data = []
+            dominant_topics = comprehensive_results.get('topics', {}).get('dominant_topics', [])
+            topic_distributions = comprehensive_results.get('topics', {}).get('topic_distributions', [])
+            
+            for i, (idx, row) in enumerate(articles_df.iterrows()):
+                if i < len(dominant_topics):
+                    distribution_data.append({
+                        'doi': row.get('doi', 'Unknown'),
+                        'title': row.get('title', 'Unknown'),
+                        'dominant_topic': f'Topic_{dominant_topics[i]}',
+                        'topic_distribution': str(topic_distributions[i]) if i < len(topic_distributions) else 'N/A'
+                    })
+            
+            return pd.DataFrame(distribution_data)
+            
+        except Exception as e:
+            self.logger.error(f"Error preparing topic distribution data: {e}")
+            return pd.DataFrame()
+
     def save_citation_analysis_to_excel(self, citing_articles_df: pd.DataFrame, citing_details_df: pd.DataFrame,
-                                      doi_list: List[str], citing_results: Dict, all_citing_titles: List[str]) -> str:
-        """Saves complete citing articles analysis to Excel"""
+                                      doi_list: List[str], citing_results: Dict, all_citing_titles: List[str],
+                                      comprehensive_results: Dict = None) -> str:
+        """Saves complete citing articles analysis to Excel with network analysis"""
         try:
             timestamp = int(time.time())
             temp_dir = tempfile.mkdtemp()
@@ -1592,6 +2086,39 @@ class CitationAnalyzer:
                 countries_percentage = 0
                 affiliations_percentage = 0
 
+            # Network analysis summary
+            network_summary = ""
+            if comprehensive_results:
+                try:
+                    citation_network = comprehensive_results.get('networks', {}).get('citation')
+                    coauthorship_network = comprehensive_results.get('networks', {}).get('coauthorship')
+                    affiliation_network = comprehensive_results.get('networks', {}).get('affiliation')
+                    
+                    network_summary = f"""
+NETWORK ANALYSIS SUMMARY
+========================
+Citation Network: {len(citation_network) if citation_network else 0} nodes, {citation_network.number_of_edges() if citation_network else 0} edges
+Coauthorship Network: {len(coauthorship_network) if coauthorship_network else 0} nodes, {coauthorship_network.number_of_edges() if coauthorship_network else 0} edges
+Affiliation Network: {len(affiliation_network) if affiliation_network else 0} nodes, {affiliation_network.number_of_edges() if affiliation_network else 0} edges
+"""
+                except Exception as e:
+                    network_summary = f"\nNETWORK ANALYSIS: Partially completed (Error: {e})"
+
+            # Topic analysis summary
+            topic_summary = ""
+            if comprehensive_results and comprehensive_results.get('topics'):
+                try:
+                    topics = comprehensive_results['topics'].get('topics_keywords', {})
+                    topic_summary = f"""
+TOPIC ANALYSIS SUMMARY
+======================
+Identified topics: {len(topics)}
+"""
+                    for topic_name, keywords in topics.items():
+                        topic_summary += f"- {topic_name}: {', '.join(keywords[:3])}...\n"
+                except Exception as e:
+                    topic_summary = f"\nTOPIC ANALYSIS: Partially completed (Error: {e})"
+
             citing_info = ""
             if citing_results:
                 citing_info = f"\nCitations per source article:"
@@ -1622,6 +2149,8 @@ DATA COMPLETENESS
 Articles with country data: {countries_percentage:.1f}%
 Articles with affiliation data: {affiliations_percentage:.1f}%
 
+{network_summary}
+{topic_summary}
 AFFILIATION PROCESSING
 ======================
 Affiliations normalized and grouped by organization
@@ -1680,6 +2209,47 @@ Affiliations normalized and grouped for consistent organization names
                     sheets_data.append((sheet_name, result_df))
                 except Exception as e:
                     sheets_data.append((sheet_name, pd.DataFrame()))
+
+            # Add network analysis sheets if available
+            if comprehensive_results:
+                try:
+                    # Network metrics
+                    network_metrics_df = self._prepare_network_metrics_data(comprehensive_results)
+                    if not network_metrics_df.empty:
+                        sheets_data.append(('Network_Metrics_Citations', network_metrics_df))
+                    
+                    # Coauthorship network
+                    coauthorship_df = self._prepare_coauthorship_data(comprehensive_results)
+                    if not coauthorship_df.empty:
+                        sheets_data.append(('Coauthorship_Network_Citations', coauthorship_df))
+                    
+                    # Affiliation network
+                    affiliation_df = self._prepare_affiliation_data(comprehensive_results)
+                    if not affiliation_df.empty:
+                        sheets_data.append(('Affiliation_Network_Citations', affiliation_df))
+                    
+                    # Topic analysis
+                    lda_topics_df = self._prepare_lda_topics_data(comprehensive_results)
+                    if not lda_topics_df.empty:
+                        sheets_data.append(('LDA_Topics_Citations', lda_topics_df))
+                    
+                    # Topic distributions
+                    topic_dist_df = self._prepare_topic_distribution_data(citing_articles_df, comprehensive_results)
+                    if not topic_dist_df.empty:
+                        sheets_data.append(('Topic_Distribution_Citations', topic_dist_df))
+                    
+                    # Topic-journal heatmap
+                    heatmap_df = comprehensive_results.get('visualizations', {}).get('topic_journal_heatmap', pd.DataFrame())
+                    if not heatmap_df.empty:
+                        sheets_data.append(('Topic_Journal_Heatmap_Citations', heatmap_df))
+                    
+                    # Temporal trends
+                    trends_df = comprehensive_results.get('visualizations', {}).get('temporal_trends', pd.DataFrame())
+                    if not trends_df.empty:
+                        sheets_data.append(('Temporal_Topic_Trends_Citations', trends_df))
+                        
+                except Exception as e:
+                    st.warning(f"Could not add network analysis sheets: {e}")
 
             try:
                 title_word_data = []
@@ -2530,7 +3100,7 @@ Affiliations normalized and grouped for consistent organization names
             years_total = pd.to_numeric(citations_df['year'], errors='coerce')
             years_total = years_total[years_total.notna() & years_total.between(1900, current_year)]
             if not years_total.empty:
-                years_total = years_total.astype(int)
+                years_total = years_total.ast(int)
                 period_counts_total = pd.cut(years_total, bins=bins, labels=labels, right=False)
                 period_df_total = period_counts_total.value_counts().reset_index()
                 period_df_total.columns = ['period', 'frequency_total']
@@ -2752,7 +3322,7 @@ Affiliations normalized and grouped for consistent organization names
 
     def save_all_data_to_excel(self, combined_df: pd.DataFrame, source_articles_df: pd.DataFrame,
                          doi_list: List[str], total_references: int, unique_dois: int,
-                         all_titles: List[str], ethics_results: Dict = None) -> str:
+                         all_titles: List[str], comprehensive_results: Dict = None) -> str:
         """Сохраняет полный анализ references в Excel и возвращает путь к файлу"""
         
         def safe_dataframe_creation(data, columns=None):
@@ -2881,33 +3451,38 @@ Affiliations normalized and grouped for consistent organization names
                 content_freq, compound_freq, scientific_freq = Counter(), Counter(), Counter()
                 st.warning(f"Title analysis failed: {e}")
     
-            # Подготавливаем данные для этического анализа
-            ethics_summary = ""
-            ethics_details = []
-            if ethics_results:
+            # Network analysis summary
+            network_summary = ""
+            if comprehensive_results:
                 try:
-                    summary = ethics_results.get('summary', {})
-                    total_findings = summary.get('total_findings', 0)
-                    severity_counts = summary.get('severity_counts', {})
+                    citation_network = comprehensive_results.get('networks', {}).get('citation')
+                    coauthorship_network = comprehensive_results.get('networks', {}).get('coauthorship')
+                    affiliation_network = comprehensive_results.get('networks', {}).get('affiliation')
                     
-                    ethics_summary = f"""
-    ETHICS ANALYSIS SUMMARY
-    =======================
-    Total findings: {total_findings}
-    High severity: {severity_counts.get('HIGH', 0)}
-    Medium severity: {severity_counts.get('MEDIUM', 0)}
-    Low severity: {severity_counts.get('LOW', 0)}
-    
-    DETAILED FINDINGS:
-    """
-                    for practice_type, findings in ethics_results.items():
-                        if practice_type != 'summary' and findings:
-                            practice_title = self._get_practice_title(practice_type)
-                            ethics_summary += f"- {practice_title}: {len(findings)} findings\n"
-                            ethics_details.append((f"Ethics_{practice_type.upper()}", findings))
-                            
+                    network_summary = f"""
+NETWORK ANALYSIS SUMMARY
+========================
+Citation Network: {len(citation_network) if citation_network else 0} nodes, {citation_network.number_of_edges() if citation_network else 0} edges
+Coauthorship Network: {len(coauthorship_network) if coauthorship_network else 0} nodes, {coauthorship_network.number_of_edges() if coauthorship_network else 0} edges
+Affiliation Network: {len(affiliation_network) if affiliation_network else 0} nodes, {affiliation_network.number_of_edges() if affiliation_network else 0} edges
+"""
                 except Exception as e:
-                    st.warning(f"Ethics results processing failed: {e}")
+                    network_summary = f"\nNETWORK ANALYSIS: Partially completed (Error: {e})"
+
+            # Topic analysis summary
+            topic_summary = ""
+            if comprehensive_results and comprehensive_results.get('topics'):
+                try:
+                    topics = comprehensive_results['topics'].get('topics_keywords', {})
+                    topic_summary = f"""
+TOPIC ANALYSIS SUMMARY
+======================
+Identified topics: {len(topics)}
+"""
+                    for topic_name, keywords in topics.items():
+                        topic_summary += f"- {topic_name}: {', '.join(keywords[:3])}...\n"
+                except Exception as e:
+                    topic_summary = f"\nTOPIC ANALYSIS: Partially completed (Error: {e})"
     
             # Создаем содержимое отчета
             summary_content = f"""@MedvDmitry production
@@ -2940,8 +3515,8 @@ Affiliations normalized and grouped for consistent organization names
     Unique compound words: {len(compound_freq)}
     Unique scientific stopwords: {len(scientific_freq)}
     
-    {ethics_summary}
-    
+    {network_summary}
+    {topic_summary}
     PERFORMANCE STATISTICS
     ======================
     Total processing time: {stats.get('elapsed_seconds', 0):.2f} seconds ({stats.get('elapsed_minutes', 0):.2f} minutes)
@@ -2959,7 +3534,6 @@ Affiliations normalized and grouped for consistent organization names
     Combined data from Crossref and OpenAlex improves completeness
     Affiliations normalized and grouped for consistent organization names
     Altmetric metrics provide social media and online attention analysis
-    Ethics analysis helps identify potential citation manipulation
     All analyses include error handling for robust operation
     """
     
@@ -3018,6 +3592,47 @@ Affiliations normalized and grouped for consistent organization names
                         sheets_to_create.append((sheet_name, pd.DataFrame([{'Message': 'No reference data available for analysis'}])))
                 except Exception as e:
                     sheets_to_create.append((sheet_name, pd.DataFrame([{'Error': f'Analysis failed: {str(e)}'}])))
+    
+            # Добавляем network analysis sheets если доступны
+            if comprehensive_results:
+                try:
+                    # Network metrics
+                    network_metrics_df = self._prepare_network_metrics_data(comprehensive_results)
+                    if not network_metrics_df.empty:
+                        sheets_to_create.append(('Network_Metrics', network_metrics_df))
+                    
+                    # Coauthorship network
+                    coauthorship_df = self._prepare_coauthorship_data(comprehensive_results)
+                    if not coauthorship_df.empty:
+                        sheets_to_create.append(('Coauthorship_Network', coauthorship_df))
+                    
+                    # Affiliation network
+                    affiliation_df = self._prepare_affiliation_data(comprehensive_results)
+                    if not affiliation_df.empty:
+                        sheets_to_create.append(('Affiliation_Network', affiliation_df))
+                    
+                    # Topic analysis
+                    lda_topics_df = self._prepare_lda_topics_data(comprehensive_results)
+                    if not lda_topics_df.empty:
+                        sheets_to_create.append(('LDA_Topics', lda_topics_df))
+                    
+                    # Topic distributions
+                    topic_dist_df = self._prepare_topic_distribution_data(combined_df, comprehensive_results)
+                    if not topic_dist_df.empty:
+                        sheets_to_create.append(('Topic_Distribution', topic_dist_df))
+                    
+                    # Topic-journal heatmap
+                    heatmap_df = comprehensive_results.get('visualizations', {}).get('topic_journal_heatmap', pd.DataFrame())
+                    if not heatmap_df.empty:
+                        sheets_to_create.append(('Topic_Journal_Heatmap', heatmap_df))
+                    
+                    # Temporal trends
+                    trends_df = comprehensive_results.get('visualizations', {}).get('temporal_trends', pd.DataFrame())
+                    if not trends_df.empty:
+                        sheets_to_create.append(('Temporal_Topic_Trends', trends_df))
+                        
+                except Exception as e:
+                    st.warning(f"Could not add network analysis sheets: {e}")
     
             # Анализ частоты слов в заголовках
             try:
@@ -3079,15 +3694,6 @@ Affiliations normalized and grouped for consistent organization names
                 
             except Exception as e:
                 sheets_to_create.append(('Title_Word_Frequency', pd.DataFrame([{'Error': f'Title analysis failed: {str(e)}'}])))
-    
-            # Добавляем этический анализ
-            for sheet_name, findings in ethics_details:
-                try:
-                    if findings:
-                        findings_df = pd.DataFrame(findings)
-                        sheets_to_create.append((sheet_name, findings_df))
-                except Exception as e:
-                    sheets_to_create.append((sheet_name, pd.DataFrame([{'Error': f'Failed to create ethics sheet: {str(e)}'}])))
     
             # Создаем все листы
             for sheet_name, data in sheets_to_create:
@@ -3197,6 +3803,12 @@ def main():
                         main_progress.progress(1.0)
                         status_text.text("Analysis complete! Generating report...")
                         
+                        # Perform comprehensive analysis
+                        st.info("Performing network and topic analysis...")
+                        comprehensive_results = st.session_state.analyzer.perform_comprehensive_analysis(
+                            combined_references_df, pd.DataFrame(), source_articles_df
+                        )
+                        
                         # Display results
                         st.subheader("Analysis Results")
                         
@@ -3222,7 +3834,8 @@ def main():
                         # Generate and download Excel report
                         excel_path = st.session_state.analyzer.save_all_data_to_excel(
                             combined_references_df, source_articles_df, doi_list, 
-                            total_references, unique_dois, all_titles
+                            total_references, unique_dois, all_titles,
+                            comprehensive_results
                         )
                         
                         if os.path.exists(excel_path):
@@ -3280,6 +3893,13 @@ def main():
                         main_progress.progress(1.0)
                         status_text.text("Analysis complete! Generating report...")
                         
+                        # Perform comprehensive analysis for citing articles
+                        st.info("Performing network and topic analysis for citing articles...")
+                        source_articles_df = pd.DataFrame()  # Empty for citing analysis
+                        comprehensive_results = st.session_state.analyzer.perform_comprehensive_analysis(
+                            pd.DataFrame(), citing_articles_df, source_articles_df
+                        )
+                        
                         # Display results
                         st.subheader("Citing Articles Analysis Results")
                         
@@ -3307,7 +3927,8 @@ def main():
                             
                             # Generate and download Excel report
                             excel_path = st.session_state.analyzer.save_citation_analysis_to_excel(
-                                citing_articles_df, citing_details_df, doi_list, citing_results, all_citing_titles
+                                citing_articles_df, citing_details_df, doi_list, citing_results, all_citing_titles,
+                                comprehensive_results
                             )
                             
                             if os.path.exists(excel_path):
@@ -3339,9 +3960,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
