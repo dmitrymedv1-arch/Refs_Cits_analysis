@@ -2599,66 +2599,122 @@ Affiliations normalized and grouped for consistent organization names
             return pd.DataFrame()
 
     def preprocess_content_words(self, text: str) -> List[str]:
-        """Предобработка контентных слов"""
+        """Улучшенная предобработка контентных слов"""
         if not text or text in ['Unknown', 'Error', '']:
             return []
         
         try:
-            text = str(text).lower()
-            text = re.sub(r'[^a-zA-Z\s-]', ' ', text)
+            text = str(text).lower().strip()
+            
+            # Более мягкая очистка текста - сохраняем буквы, цифры, пробелы и дефисы
+            text = re.sub(r'[^\w\s-]', ' ', text)
             text = re.sub(r'\s+', ' ', text).strip()
+            
+            if not text or len(text) < 5:
+                return []
+                
             words = text.split()
             content_words = []
             
             for word in words:
-                if '-' in word:
+                # Пропускаем слишком короткие слова
+                if len(word) < 3:
                     continue
-                if len(word) > 2 and word not in self.stop_words and word != 'sub':
-                    stemmed_word = self.stemmer.stem(word)
-                    if stemmed_word not in self.scientific_stopwords_stemmed:
-                        content_words.append(stemmed_word)
+                    
+                # Пропускаем стоп-слова
+                if word in self.stop_words:
+                    continue
+                    
+                # Пропускаем слова, состоящие только из цифр
+                if word.isdigit():
+                    continue
+                    
+                # Пропускаем слова, которые слишком длинные (вероятно, ошибки)
+                if len(word) > 25:
+                    continue
+                    
+                # Стемминг слова
+                stemmed_word = self.stemmer.stem(word)
+                
+                # Пропускаем научные стоп-слова
+                if stemmed_word not in self.scientific_stopwords_stemmed:
+                    content_words.append(stemmed_word)
+                    
             return content_words
-        except Exception:
+            
+        except Exception as e:
             return []
 
     def extract_compound_words(self, text: str) -> List[str]:
-        """Извлечение составных слов"""
+        """Извлечение составных слов с улучшенной логикой"""
         if not text or text in ['Unknown', 'Error', '']:
             return []
         
         try:
-            text = str(text).lower()
-            compound_words = re.findall(r'\b[a-z]{2,}-[a-z]{2,}(?:-[a-z]{2,})*\b', text)
-            return [word for word in compound_words if not any(part in self.stop_words for part in word.split('-'))]
-        except Exception:
+            text = str(text).lower().strip()
+            
+            # Ищем слова через дефис
+            compound_words = re.findall(r'\b[a-z]{2,}(?:-[a-z]{2,})+\b', text)
+            
+            # Фильтруем результаты
+            filtered_compounds = []
+            for word in compound_words:
+                # Разбиваем на части
+                parts = word.split('-')
+                
+                # Проверяем, что все части не являются стоп-словами и достаточно длинные
+                valid_parts = all(
+                    len(part) >= 2 and 
+                    part not in self.stop_words and 
+                    not part.isdigit()
+                    for part in parts
+                )
+                
+                if valid_parts and len(word) >= 5:
+                    filtered_compounds.append(word)
+                    
+            return filtered_compounds
+            
+        except Exception as e:
             return []
-
+    
     def extract_scientific_stopwords(self, text: str) -> List[str]:
-        """Извлечение научных стоп-слов"""
+        """Извлечение научных стоп-слов с улучшенной логикой"""
         if not text or text in ['Unknown', 'Error', '']:
             return []
         
         try:
-            text = str(text).lower()
-            text = re.sub(r'[^a-zA-Z\s]', ' ', text)
+            text = str(text).lower().strip()
+            
+            # Очистка текста
+            text = re.sub(r'[^\w\s]', ' ', text)
             text = re.sub(r'\s+', ' ', text).strip()
+            
+            if not text:
+                return []
+                
             words = text.split()
             scientific_words = []
             
             for word in words:
                 if len(word) > 2:
                     stemmed_word = self.stemmer.stem(word)
+                    
+                    # Проверяем, является ли слово научным стоп-словом
                     if stemmed_word in self.scientific_stopwords_stemmed:
+                        # Находим оригинальное слово для отображения
                         for original_word in self.scientific_stopwords:
                             if self.stemmer.stem(original_word) == stemmed_word:
                                 scientific_words.append(original_word)
                                 break
+                                
             return scientific_words
-        except Exception:
+            
+        except Exception as e:
             return []
-
+    
     def analyze_titles(self, titles: List[str]) -> tuple[Counter, Counter, Counter]:
-        """Анализ частоты слов в заголовках"""
+        """Анализ заголовков с улучшенной обработкой"""
         content_words = []
         compound_words = []
         scientific_words = []
@@ -2667,37 +2723,105 @@ Affiliations normalized and grouped for consistent organization names
         valid_titles = [t for t in titles if t and t not in ['Unknown', 'Error', '']]
         
         if not valid_titles:
+            st.warning("No valid titles found for analysis")
             return Counter(), Counter(), Counter()
+        
+        st.info(f"Analyzing {len(valid_titles)} valid titles...")
         
         for title in valid_titles:
             try:
-                content_words.extend(self.preprocess_content_words(title))
-                compound_words.extend(self.extract_compound_words(title))
-                scientific_words.extend(self.extract_scientific_stopwords(title))
+                # Анализируем контентные слова
+                title_content_words = self.preprocess_content_words(title)
+                content_words.extend(title_content_words)
+                
+                # Анализируем составные слова
+                title_compound_words = self.extract_compound_words(title)
+                compound_words.extend(title_compound_words)
+                
+                # Анализируем научные стоп-слова
+                title_scientific_words = self.extract_scientific_stopwords(title)
+                scientific_words.extend(title_scientific_words)
+                
             except Exception as e:
-                continue  # Пропускаем заголовки с ошибками обработки
+                continue
+        
+        # Отладочная информация
+        st.info(f"Found {len(content_words)} content words, {len(compound_words)} compound words, {len(scientific_words)} scientific stopwords")
         
         return Counter(content_words), Counter(compound_words), Counter(scientific_words)
 
     def save_all_data_to_excel(self, combined_df: pd.DataFrame, source_articles_df: pd.DataFrame,
-                             doi_list: List[str], total_references: int, unique_dois: int,
-                             all_titles: List[str]) -> str:
-        """Saves references analysis to Excel with comprehensive error handling"""
+                         doi_list: List[str], total_references: int, unique_dois: int,
+                         all_titles: List[str], ethics_results: Dict = None) -> BytesIO:
+        """Сохраняет полный анализ references в Excel с комплексной обработкой ошибок"""
+        
+        def safe_dataframe_creation(data, columns=None):
+            """Безопасное создание DataFrame с обработкой ошибок"""
+            try:
+                if isinstance(data, pd.DataFrame):
+                    return data.copy()
+                elif isinstance(data, list) and len(data) > 0:
+                    return pd.DataFrame(data, columns=columns) if columns else pd.DataFrame(data)
+                else:
+                    return pd.DataFrame()
+            except Exception as e:
+                return pd.DataFrame()
+    
+        def add_sheet_to_workbook(wb, sheet_name, data, max_rows=100000):
+            """Безопасное добавление листа в рабочую книгу"""
+            try:
+                if data.empty:
+                    ws = wb.create_sheet(sheet_name)
+                    ws.append(["No data available"])
+                    return
+                
+                # Ограничиваем количество строк для больших наборов данных
+                if len(data) > max_rows:
+                    data = data.head(max_rows)
+                    st.warning(f"Sheet '{sheet_name}' limited to {max_rows} rows")
+                
+                ws = wb.create_sheet(sheet_name)
+                
+                # Конвертируем все данные в строки для избежания проблем с типами
+                for r in dataframe_to_rows(data, index=False, header=True):
+                    cleaned_row = []
+                    for cell in r:
+                        if cell is None:
+                            cleaned_row.append('')
+                        elif pd.isna(cell):
+                            cleaned_row.append('')
+                        else:
+                            # Конвертируем в строку и очищаем от проблемных символов
+                            cell_str = str(cell)
+                            # Удаляем не-ASCII символы которые могут вызвать проблемы
+                            cell_str = cell_str.encode('ascii', 'ignore').decode('ascii')
+                            cleaned_row.append(cell_str)
+                    ws.append(cleaned_row)
+                    
+            except Exception as e:
+                st.error(f"Error creating sheet '{sheet_name}': {e}")
+                try:
+                    ws = wb.create_sheet(sheet_name)
+                    ws.append([f"Error creating sheet: {str(e)}"])
+                except:
+                    pass
+    
         try:
             timestamp = int(time.time())
-            excel_path = os.path.join(tempfile.gettempdir(), f"references_analysis_results_{timestamp}.xlsx")
+            excel_buffer = BytesIO()
             wb = Workbook()
     
-            # Remove default sheet and create summary first
-            wb.remove(wb.active)
+            # Удаляем дефолтный лист
+            if wb.active:
+                wb.remove(wb.active)
     
-            # Initialize variables with safe defaults
+            # Инициализируем переменные с безопасными значениями по умолчанию
             unique_df = pd.DataFrame()
             duplicate_df = pd.DataFrame()
             failed_df = pd.DataFrame()
             stats = self.performance_monitor.get_stats()
     
-            # Get analysis data with error handling
+            # Получаем данные анализа с обработкой ошибок
             try:
                 unique_df = self.get_unique_references(combined_df)
             except Exception as e:
@@ -2717,28 +2841,73 @@ Affiliations normalized and grouped for consistent organization names
             except Exception as e:
                 st.warning(f"Could not create failed references: {e}")
     
-            # Calculate statistics with error handling
+            # Рассчитываем статистику с обработкой ошибок
             try:
                 total_processed = len(combined_df) if not combined_df.empty else 0
                 
                 countries_with_data = 0
                 affiliations_with_data = 0
+                altmetric_with_data = 0
                 
                 if not combined_df.empty:
                     if 'countries' in combined_df.columns:
-                        countries_with_data = len(combined_df[~combined_df['countries'].isin(['Unknown', 'Error', '']) & combined_df['countries'].notna()])
+                        countries_with_data = len(combined_df[
+                            ~combined_df['countries'].isin(['Unknown', 'Error', '']) & 
+                            combined_df['countries'].notna()
+                        ])
                     if 'affiliations' in combined_df.columns:
-                        affiliations_with_data = len(combined_df[~combined_df['affiliations'].isin(['Unknown', 'Error', '']) & combined_df['affiliations'].notna()])
+                        affiliations_with_data = len(combined_df[
+                            ~combined_df['affiliations'].isin(['Unknown', 'Error', '']) & 
+                            combined_df['affiliations'].notna()
+                        ])
+                    if 'altmetric_score' in combined_df.columns:
+                        altmetric_with_data = len(combined_df[combined_df['altmetric_score'] > 0])
                 
                 countries_percentage = (countries_with_data / total_processed * 100) if total_processed > 0 else 0
                 affiliations_percentage = (affiliations_with_data / total_processed * 100) if total_processed > 0 else 0
+                altmetric_percentage = (altmetric_with_data / total_processed * 100) if total_processed > 0 else 0
     
             except Exception as e:
                 countries_percentage = 0
                 affiliations_percentage = 0
-                st.warning(f"Error calculating statistics: {e}")
+                altmetric_percentage = 0
     
-            # Create comprehensive summary
+            # Анализ заголовков
+            try:
+                content_freq, compound_freq, scientific_freq = self.analyze_titles(all_titles)
+            except Exception as e:
+                content_freq, compound_freq, scientific_freq = Counter(), Counter(), Counter()
+                st.warning(f"Title analysis failed: {e}")
+    
+            # Подготавливаем данные для этического анализа
+            ethics_summary = ""
+            ethics_details = []
+            if ethics_results:
+                try:
+                    summary = ethics_results.get('summary', {})
+                    total_findings = summary.get('total_findings', 0)
+                    severity_counts = summary.get('severity_counts', {})
+                    
+                    ethics_summary = f"""
+    ETHICS ANALYSIS SUMMARY
+    =======================
+    Total findings: {total_findings}
+    High severity: {severity_counts.get('HIGH', 0)}
+    Medium severity: {severity_counts.get('MEDIUM', 0)}
+    Low severity: {severity_counts.get('LOW', 0)}
+    
+    DETAILED FINDINGS:
+    """
+                    for practice_type, findings in ethics_results.items():
+                        if practice_type != 'summary' and findings:
+                            practice_title = self._get_practice_title(practice_type)
+                            ethics_summary += f"- {practice_title}: {len(findings)} findings\n"
+                            ethics_details.append((f"Ethics_{practice_type.upper()}", findings))
+                            
+                except Exception as e:
+                    st.warning(f"Ethics results processing failed: {e}")
+    
+            # Создаем содержимое отчета
             summary_content = f"""@MedvDmitry production
     
     REFERENCES ANALYSIS REPORT
@@ -2760,12 +2929,16 @@ Affiliations normalized and grouped for consistent organization names
     =================
     References with country data: {countries_percentage:.1f}%
     References with affiliation data: {affiliations_percentage:.1f}%
+    References with altmetric data: {altmetric_percentage:.1f}%
     
-    AFFILIATION PROCESSING
-    ======================
-    Affiliations normalized and grouped by organization
-    Similar affiliations merged together
-    Frequency counts reflect grouped organizations
+    TITLE ANALYSIS
+    ==============
+    Valid titles processed: {len([t for t in all_titles if t not in ['Unknown', 'Error', '']])}
+    Unique content words: {len(content_freq)}
+    Unique compound words: {len(compound_freq)}
+    Unique scientific stopwords: {len(scientific_freq)}
+    
+    {ethics_summary}
     
     PERFORMANCE STATISTICS
     ======================
@@ -2775,39 +2948,31 @@ Affiliations normalized and grouped for consistent organization names
     
     SOURCE ARTICLES ANALYZED
     ========================
-    {chr(10).join(f"- {doi}" for doi in doi_list[:10])}
-    {'...' if len(doi_list) > 10 else ''}
+    {chr(10).join(f"- {doi}" for doi in doi_list[:20])}
+    {'...' if len(doi_list) > 20 else ''}
     
     DATA QUALITY NOTES
     ==================
     Analysis focuses on references cited by the source articles
     Combined data from Crossref and OpenAlex improves completeness
-    All standard statistical analyses performed (authors, journals, countries, etc.)
-    Error handling ensures report generation even with partial data
     Affiliations normalized and grouped for consistent organization names
+    Altmetric metrics provide social media and online attention analysis
+    Ethics analysis helps identify potential citation manipulation
+    All analyses include error handling for robust operation
     """
     
-            # Create Report_Summary sheet
-            ws_summary = wb.create_sheet('Report_Summary')
-            for line in summary_content.split('\n'):
-                ws_summary.append([line])
+            # Создаем лист с отчетом
+            try:
+                ws_summary = wb.create_sheet('Report_Summary')
+                for line in summary_content.split('\n'):
+                    ws_summary.append([line])
+            except Exception as e:
+                st.error(f"Error creating summary sheet: {e}")
     
-            # Prepare main data sheets
-            sheets_data = []
+            # Подготавливаем основные таблицы данных
+            sheets_to_create = []
     
-            # Clean up column names for main tables
-            def clean_dataframe(df):
-                if df.empty:
-                    return df
-                # Remove authors_surnames if exists
-                if 'authors_surnames' in df.columns:
-                    df = df.drop(columns=['authors_surnames'])
-                # Ensure all columns are strings to avoid encoding issues
-                for col in df.columns:
-                    df[col] = df[col].astype(str)
-                return df
-    
-            # Add main data sheets
+            # Основные данные
             main_sheets = [
                 ('Source_Articles', source_articles_df),
                 ('All_References', combined_df),
@@ -2818,13 +2983,18 @@ Affiliations normalized and grouped for consistent organization names
     
             for sheet_name, df in main_sheets:
                 try:
-                    cleaned_df = clean_dataframe(df.copy() if not df.empty else df)
-                    sheets_data.append((sheet_name, cleaned_df))
+                    if not df.empty:
+                        # Очищаем данные от проблемных столбцов
+                        clean_df = df.copy()
+                        if 'authors_surnames' in clean_df.columns:
+                            clean_df = clean_df.drop(columns=['authors_surnames'])
+                        sheets_to_create.append((sheet_name, clean_df))
+                    else:
+                        sheets_to_create.append((sheet_name, pd.DataFrame([{'Message': f'No data for {sheet_name}'}])))
                 except Exception as e:
-                    st.warning(f"Error preparing {sheet_name}: {e}")
-                    sheets_data.append((sheet_name, pd.DataFrame()))
+                    sheets_to_create.append((sheet_name, pd.DataFrame([{'Error': f'Error preparing {sheet_name}: {str(e)}'}])))
     
-            # Add analysis sheets with comprehensive error handling
+            # Статистические анализы
             analysis_methods = [
                 ('Author_Frequency', self.analyze_authors_frequency),
                 ('Journal_Frequency', self.analyze_journals_frequency),
@@ -2839,28 +3009,21 @@ Affiliations normalized and grouped for consistent organization names
                     if not combined_df.empty:
                         result_df = method(combined_df)
                         if not result_df.empty:
-                            sheets_data.append((sheet_name, result_df))
+                            sheets_to_create.append((sheet_name, result_df))
                         else:
-                            # Create empty sheet with message
-                            empty_df = pd.DataFrame([{'Message': f'No data available for {sheet_name}'}])
-                            sheets_data.append((sheet_name, empty_df))
+                            sheets_to_create.append((sheet_name, pd.DataFrame([{'Message': f'No data available for {sheet_name}'}])))
                     else:
-                        empty_df = pd.DataFrame([{'Message': 'No reference data available for analysis'}])
-                        sheets_data.append((sheet_name, empty_df))
+                        sheets_to_create.append((sheet_name, pd.DataFrame([{'Message': 'No reference data available for analysis'}])))
                 except Exception as e:
-                    st.warning(f"Error in {sheet_name} analysis: {e}")
-                    error_df = pd.DataFrame([{'Error': f'Analysis failed: {str(e)}'}])
-                    sheets_data.append((sheet_name, error_df))
+                    sheets_to_create.append((sheet_name, pd.DataFrame([{'Error': f'Analysis failed: {str(e)}'}])))
     
-            # Add title word frequency analysis
+            # Анализ частоты слов в заголовках
             try:
-                content_freq, compound_freq, scientific_freq = self.analyze_titles(all_titles)
-                
                 title_word_data = []
                 
-                # Add content words
+                # Content words
                 if content_freq:
-                    for i, (word, count) in enumerate(content_freq.most_common(50), 1):
+                    for i, (word, count) in enumerate(content_freq.most_common(100), 1):
                         title_word_data.append({
                             'Category': 'Content_Words', 
                             'Rank': i, 
@@ -2871,11 +3034,11 @@ Affiliations normalized and grouped for consistent organization names
                     title_word_data.append({
                         'Category': 'Content_Words', 
                         'Rank': 1, 
-                        'Word': 'No content words found', 
+                        'Word': 'No significant content words found', 
                         'Frequency': 0
                     })
                 
-                # Add compound words
+                # Compound words
                 if compound_freq:
                     for i, (word, count) in enumerate(compound_freq.most_common(50), 1):
                         title_word_data.append({
@@ -2892,7 +3055,7 @@ Affiliations normalized and grouped for consistent organization names
                         'Frequency': 0
                     })
                 
-                # Add scientific stopwords
+                # Scientific stopwords
                 if scientific_freq:
                     for i, (word, count) in enumerate(scientific_freq.most_common(50), 1):
                         title_word_data.append({
@@ -2910,82 +3073,71 @@ Affiliations normalized and grouped for consistent organization names
                     })
     
                 title_word_df = pd.DataFrame(title_word_data)
-                sheets_data.append(('Title_Word_Frequency', title_word_df))
+                sheets_to_create.append(('Title_Word_Frequency', title_word_df))
                 
             except Exception as e:
-                st.warning(f"Error creating title word frequency: {e}")
-                error_df = pd.DataFrame([{
-                    'Error': f'Could not analyze title words: {str(e)}'
-                }])
-                sheets_data.append(('Title_Word_Frequency', error_df))
+                sheets_to_create.append(('Title_Word_Frequency', pd.DataFrame([{'Error': f'Title analysis failed: {str(e)}'}])))
     
-            # Create all sheets in Excel
-            for sheet_name, df in sheets_data:
+            # Добавляем этический анализ
+            for sheet_name, findings in ethics_details:
                 try:
-                    ws = wb.create_sheet(sheet_name)
-                    
-                    if df.empty:
-                        ws.append([f"No data available for {sheet_name}"])
-                        continue
-                    
-                    # Convert DataFrame to rows and write to sheet
-                    for r in dataframe_to_rows(df, index=False, header=True):
-                        # Clean any problematic characters in cells
-                        cleaned_row = []
-                        for cell in r:
-                            if cell is None:
-                                cleaned_row.append('')
-                            else:
-                                # Convert to string and remove problematic characters
-                                cleaned_cell = str(cell).encode('ascii', 'ignore').decode('ascii')
-                                cleaned_row.append(cleaned_cell)
-                        ws.append(cleaned_row)
-                        
+                    if findings:
+                        findings_df = pd.DataFrame(findings)
+                        sheets_to_create.append((sheet_name, findings_df))
                 except Exception as e:
-                    st.warning(f"Error creating sheet {sheet_name}: {e}")
-                    # Create minimal error sheet
-                    try:
-                        ws = wb.create_sheet(sheet_name)
-                        ws.append([f"Error creating sheet: {str(e)}"])
-                    except:
-                        pass  # If we can't even create the error sheet, skip it
+                    sheets_to_create.append((sheet_name, pd.DataFrame([{'Error': f'Failed to create ethics sheet: {str(e)}'}])))
     
-            # Save the workbook
+            # Создаем все листы
+            for sheet_name, data in sheets_to_create:
+                try:
+                    if isinstance(data, list):
+                        data_df = pd.DataFrame(data)
+                    else:
+                        data_df = data
+                    
+                    add_sheet_to_workbook(wb, sheet_name, data_df)
+                except Exception as e:
+                    st.error(f"Failed to create sheet {sheet_name}: {e}")
+    
+            # Сохраняем рабочую книгу
             try:
-                wb.save(excel_path)
-                st.success(f"Excel report successfully created: {os.path.basename(excel_path)}")
-                return excel_path
+                wb.save(excel_buffer)
+                excel_buffer.seek(0)
+                st.success("✅ Excel report successfully created!")
+                return excel_buffer
                 
             except Exception as e:
                 st.error(f"Error saving Excel file: {e}")
-                # Try to save a minimal version
+                # Пытаемся сохранить минимальную версию
                 try:
-                    minimal_path = os.path.join(tempfile.gettempdir(), f"minimal_report_{timestamp}.xlsx")
+                    minimal_buffer = BytesIO()
                     minimal_wb = Workbook()
                     ws = minimal_wb.active
-                    ws.title = "Error_Report"
+                    ws.title = "Minimal_Report"
                     ws.append(["MINIMAL REPORT - DATA EXPORT ERROR"])
                     ws.append([f"Original error: {str(e)}"])
                     ws.append([f"DOIs processed: {len(doi_list)}"])
                     ws.append([f"References found: {total_references}"])
-                    minimal_wb.save(minimal_path)
-                    return minimal_path
+                    ws.append([f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"])
+                    minimal_wb.save(minimal_buffer)
+                    minimal_buffer.seek(0)
+                    return minimal_buffer
                 except:
-                    return "error_creating_excel_report"
+                    error_buffer = BytesIO()
+                    error_buffer.write(b"Error creating Excel report")
+                    error_buffer.seek(0)
+                    return error_buffer
     
         except Exception as e:
             st.error(f"Critical error in save_all_data_to_excel: {e}")
+            # Последняя попытка - создаем очень простой файл ошибки
             try:
-                # Last resort - create a very basic error file
-                error_path = os.path.join(tempfile.gettempdir(), f"error_report_{timestamp}.txt")
-                with open(error_path, 'w', encoding='utf-8') as f:
-                    f.write(f"ERROR REPORT\n")
-                    f.write(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    f.write(f"Error: {str(e)}\n")
-                    f.write(f"DOIs: {doi_list}\n")
-                return error_path
+                error_buffer = BytesIO()
+                error_buffer.write(f"ERROR REPORT\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\nError: {str(e)}\nDOIs: {doi_list}".encode('utf-8'))
+                error_buffer.seek(0)
+                return error_buffer
             except:
-                return "complete_export_failure"
+                return BytesIO(b"Complete export failure")
 
 # =============================================
 # STREAMLIT INTERFACE
@@ -3187,6 +3339,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
