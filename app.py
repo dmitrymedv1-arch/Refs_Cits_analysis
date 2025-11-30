@@ -34,6 +34,10 @@ from sklearn.decomposition import LatentDirichletAllocation
 from sklearn.cluster import KMeans
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import matplotlib.pyplot as plt
+from wordcloud import WordCloud
+import seaborn as sns
 
 # Ensure NLTK data is available
 try:
@@ -117,6 +121,412 @@ class PerformanceMonitor:
                 'requests_per_second': self.request_count / elapsed if elapsed > 0 else 0
             }
         return {}
+
+# =============================================
+# VISUALIZATION MANAGER
+# =============================================
+
+class VisualizationManager:
+    def __init__(self):
+        self.color_palette = px.colors.qualitative.Set3
+        self.template = "plotly_white"
+    
+    def create_metrics_dashboard(self, metrics_data: Dict) -> go.Figure:
+        """Создает дашборд с ключевыми метриками"""
+        fig = make_subplots(
+            rows=2, cols=3,
+            specs=[[{"type": "indicator"}, {"type": "indicator"}, {"type": "indicator"}],
+                   [{"type": "indicator"}, {"type": "indicator"}, {"type": "indicator"}]],
+            subplot_titles=("Total Articles", "Total Citations", "Unique Authors", 
+                          "Countries", "Journals", "Affiliations")
+        )
+        
+        if metrics_data:
+            # Добавляем индикаторы
+            metrics = [
+                metrics_data.get('total_articles', 0),
+                metrics_data.get('total_citations', 0),
+                metrics_data.get('unique_authors', 0),
+                metrics_data.get('countries', 0),
+                metrics_data.get('journals', 0),
+                metrics_data.get('affiliations', 0)
+            ]
+            
+            titles = ["Total Articles", "Total Citations", "Unique Authors", 
+                     "Countries", "Journals", "Affiliations"]
+            
+            for i, (metric, title) in enumerate(zip(metrics, titles)):
+                row = i // 3 + 1
+                col = i % 3 + 1
+                
+                fig.add_trace(
+                    go.Indicator(
+                        mode="number",
+                        value=metric,
+                        title={"text": title},
+                        domain={'row': row-1, 'column': col-1}
+                    ),
+                    row=row, col=col
+                )
+        
+        fig.update_layout(
+            height=400,
+            template=self.template,
+            title_text="Key Metrics Dashboard",
+            showlegend=False
+        )
+        return fig
+    
+    def create_temporal_trends(self, year_data: pd.DataFrame, title: str = "Publication Trends") -> go.Figure:
+        """Создает график временных трендов"""
+        if year_data.empty:
+            return go.Figure()
+        
+        fig = go.Figure()
+        
+        # Общие публикации
+        if 'frequency_total' in year_data.columns:
+            fig.add_trace(go.Scatter(
+                x=year_data['year'],
+                y=year_data['frequency_total'],
+                mode='lines+markers',
+                name='Total Publications',
+                line=dict(color=self.color_palette[0], width=3),
+                marker=dict(size=8)
+            ))
+        
+        # Уникальные публикации
+        if 'frequency_unique' in year_data.columns:
+            fig.add_trace(go.Scatter(
+                x=year_data['year'],
+                y=year_data['frequency_unique'],
+                mode='lines+markers',
+                name='Unique Publications',
+                line=dict(color=self.color_palette[1], width=3),
+                marker=dict(size=8)
+            ))
+        
+        fig.update_layout(
+            title=title,
+            xaxis_title="Year",
+            yaxis_title="Number of Publications",
+            template=self.template,
+            height=500,
+            showlegend=True
+        )
+        
+        return fig
+    
+    def create_journal_distribution(self, journal_data: pd.DataFrame, top_n: int = 15) -> go.Figure:
+        """Создает столбчатую диаграмму распределения по журналам"""
+        if journal_data.empty:
+            return go.Figure()
+        
+        top_journals = journal_data.head(top_n)
+        
+        fig = go.Figure(data=[
+            go.Bar(
+                x=top_journals['journal_abbreviation'],
+                y=top_journals['frequency_total'],
+                marker_color=self.color_palette,
+                text=top_journals['frequency_total'],
+                textposition='auto',
+            )
+        ])
+        
+        fig.update_layout(
+            title=f"Top {top_n} Journals by Publication Count",
+            xaxis_title="Journal",
+            yaxis_title="Number of Publications",
+            template=self.template,
+            height=500,
+            xaxis_tickangle=-45
+        )
+        
+        return fig
+    
+    def create_country_choropleth(self, country_data: pd.DataFrame) -> go.Figure:
+        """Создает хороплет карту распределения по странам"""
+        if country_data.empty:
+            return go.Figure()
+        
+        # Подготовка данных для карты
+        country_map_data = country_data[country_data['type'] == 'single'].copy()
+        
+        if country_map_data.empty:
+            return go.Figure()
+        
+        fig = px.choropleth(
+            country_map_data,
+            locations='countries',
+            color='frequency_total',
+            hover_name='country_fullname',
+            color_continuous_scale=px.colors.sequential.Plasma,
+            title="Geographical Distribution of Publications"
+        )
+        
+        fig.update_layout(
+            height=600,
+            template=self.template
+        )
+        
+        return fig
+    
+    def create_author_network(self, coauthorship_data: pd.DataFrame, min_collaborations: int = 2) -> go.Figure:
+        """Создает сетевой граф соавторства"""
+        if coauthorship_data.empty:
+            return go.Figure()
+        
+        # Фильтруем по минимальному количеству коллабораций
+        filtered_data = coauthorship_data[coauthorship_data['collaboration_count'] >= min_collaborations]
+        
+        if filtered_data.empty:
+            return go.Figure()
+        
+        # Создаем граф
+        G = nx.Graph()
+        for _, row in filtered_data.iterrows():
+            G.add_edge(row['author_1'], row['author_2'], weight=row['collaboration_count'])
+        
+        # Позиции узлов
+        pos = nx.spring_layout(G, k=1, iterations=50)
+        
+        # Подготовка данных для Plotly
+        edge_x = []
+        edge_y = []
+        for edge in G.edges():
+            x0, y0 = pos[edge[0]]
+            x1, y1 = pos[edge[1]]
+            edge_x.extend([x0, x1, None])
+            edge_y.extend([y0, y1, None])
+        
+        edge_trace = go.Scatter(
+            x=edge_x, y=edge_y,
+            line=dict(width=1, color='#888'),
+            hoverinfo='none',
+            mode='lines')
+        
+        node_x = []
+        node_y = []
+        node_text = []
+        node_size = []
+        for node in G.nodes():
+            x, y = pos[node]
+            node_x.append(x)
+            node_y.append(y)
+            node_text.append(node)
+            node_size.append(10 + G.degree(node) * 2)
+        
+        node_trace = go.Scatter(
+            x=node_x, y=node_y,
+            mode='markers+text',
+            hoverinfo='text',
+            text=node_text,
+            textposition="middle center",
+            marker=dict(
+                size=node_size,
+                color=self.color_palette[0],
+                line=dict(width=2, color='darkblue')
+            )
+        )
+        
+        fig = go.Figure(data=[edge_trace, node_trace],
+                       layout=go.Layout(
+                           title='Co-authorship Network',
+                           showlegend=False,
+                           hovermode='closest',
+                           margin=dict(b=20,l=5,r=5,t=40),
+                           annotations=[ dict(
+                               text="Node size represents number of collaborations",
+                               showarrow=False,
+                               xref="paper", yref="paper",
+                               x=0.005, y=-0.002) ],
+                           xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                           yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                           height=600
+                       ))
+        
+        return fig
+    
+    def create_word_cloud(self, word_freq: Counter, title: str = "Word Cloud") -> plt.Figure:
+        """Создает облако слов"""
+        if not word_freq:
+            # Создаем пустое изображение
+            fig, ax = plt.subplots(figsize=(10, 5))
+            ax.text(0.5, 0.5, 'No data available for word cloud', 
+                   horizontalalignment='center', verticalalignment='center',
+                   transform=ax.transAxes, fontsize=14)
+            ax.axis('off')
+            return fig
+        
+        wordcloud = WordCloud(
+            width=800, 
+            height=400, 
+            background_color='white',
+            colormap='viridis',
+            max_words=100
+        ).generate_from_frequencies(word_freq)
+        
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.imshow(wordcloud, interpolation='bilinear')
+        ax.axis('off')
+        ax.set_title(title, fontsize=16, pad=20)
+        
+        return fig
+    
+    def create_topic_distribution(self, topic_data: pd.DataFrame) -> go.Figure:
+        """Создает визуализацию распределения тем"""
+        if topic_data.empty:
+            return go.Figure()
+        
+        fig = px.bar(
+            topic_data,
+            x='topic',
+            y='keyword_count',
+            color='topic',
+            title="LDA Topics Distribution",
+            labels={'keyword_count': 'Number of Keywords', 'topic': 'Topic'}
+        )
+        
+        fig.update_layout(
+            template=self.template,
+            height=500,
+            showlegend=False,
+            xaxis_tickangle=-45
+        )
+        
+        return fig
+    
+    def create_citation_network(self, citation_data: pd.DataFrame) -> go.Figure:
+        """Создает сетевой граф цитирований"""
+        if citation_data.empty:
+            return go.Figure()
+        
+        # Создаем ориентированный граф
+        G = nx.DiGraph()
+        
+        for _, row in citation_data.iterrows():
+            if row['source_doi'] and row['doi']:
+                G.add_edge(row['source_doi'], row['doi'])
+        
+        if len(G.nodes) == 0:
+            return go.Figure()
+        
+        # Позиции узлов
+        pos = nx.spring_layout(G, k=1, iterations=50)
+        
+        # Подготовка данных для Plotly
+        edge_x = []
+        edge_y = []
+        for edge in G.edges():
+            x0, y0 = pos[edge[0]]
+            x1, y1 = pos[edge[1]]
+            edge_x.extend([x0, x1, None])
+            edge_y.extend([y0, y1, None])
+        
+        edge_trace = go.Scatter(
+            x=edge_x, y=edge_y,
+            line=dict(width=1, color='red'),
+            hoverinfo='none',
+            mode='lines')
+        
+        node_x = []
+        node_y = []
+        node_text = []
+        for node in G.nodes():
+            x, y = pos[node]
+            node_x.append(x)
+            node_y.append(y)
+            node_text.append(f"DOI: {node[:20]}...")
+        
+        node_trace = go.Scatter(
+            x=node_x, y=node_y,
+            mode='markers',
+            hoverinfo='text',
+            text=node_text,
+            marker=dict(
+                size=15,
+                color='lightblue',
+                line=dict(width=2, color='darkblue')
+            )
+        )
+        
+        fig = go.Figure(data=[edge_trace, node_trace],
+                       layout=go.Layout(
+                           title='Citation Network',
+                           showlegend=False,
+                           hovermode='closest',
+                           margin=dict(b=20,l=5,r=5,t=40),
+                           xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                           yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                           height=600
+                       ))
+        
+        return fig
+    
+    def create_affiliation_collaboration(self, affiliation_data: pd.DataFrame) -> go.Figure:
+        """Создает тепловую карту коллабораций между организациями"""
+        if affiliation_data.empty:
+            return go.Figure()
+        
+        # Создаем матрицу коллабораций
+        affiliations = list(set(affiliation_data['affiliation_1'].tolist() + affiliation_data['affiliation_2'].tolist()))
+        collaboration_matrix = pd.DataFrame(0, index=affiliations, columns=affiliations)
+        
+        for _, row in affiliation_data.iterrows():
+            aff1, aff2 = row['affiliation_1'], row['affiliation_2']
+            collaboration_matrix.loc[aff1, aff2] = row['collaboration_count']
+            collaboration_matrix.loc[aff2, aff1] = row['collaboration_count']
+        
+        # Ограничиваем размер для лучшей визуализации
+        if len(affiliations) > 20:
+            top_affiliations = collaboration_matrix.sum().nlargest(20).index
+            collaboration_matrix = collaboration_matrix.loc[top_affiliations, top_affiliations]
+        
+        fig = px.imshow(
+            collaboration_matrix,
+            title="Affiliation Collaboration Heatmap",
+            color_continuous_scale='Viridis',
+            aspect="auto"
+        )
+        
+        fig.update_layout(
+            height=600,
+            xaxis_title="Affiliation",
+            yaxis_title="Affiliation",
+            template=self.template
+        )
+        
+        return fig
+    
+    def create_citation_impact_plot(self, articles_df: pd.DataFrame) -> go.Figure:
+        """Создает график влияния цитирований"""
+        if articles_df.empty:
+            return go.Figure()
+        
+        fig = px.scatter(
+            articles_df,
+            x='year',
+            y='citation_count_openalex',
+            size='author_count',
+            color='journal_abbreviation',
+            hover_name='title',
+            title="Citation Impact Analysis",
+            labels={
+                'citation_count_openalex': 'Citation Count (OpenAlex)',
+                'year': 'Publication Year',
+                'author_count': 'Number of Authors',
+                'journal_abbreviation': 'Journal'
+            }
+        )
+        
+        fig.update_layout(
+            height=600,
+            template=self.template,
+            showlegend=True
+        )
+        
+        return fig
 
 # =============================================
 # TOPIC ANALYZER
@@ -508,6 +918,7 @@ class CitationAnalyzer:
         self.citation_network = None
         self.coauthorship_network = None
         self.affiliation_network = None
+        self.visualization_manager = VisualizationManager()
         self.setup_logging()
 
     def setup_logging(self):
@@ -2042,7 +2453,7 @@ class CitationAnalyzer:
         """Saves complete citing articles analysis to Excel with network analysis"""
         try:
             timestamp = int(time.time())
-            temp_dir = tempfile.mkdtemp()
+            temp_dir = tempfile.gettempdir()
 
             excel_path = os.path.join(tempfile.gettempdir(), f"citation_analysis_results_{timestamp}.xlsx")
             wb = Workbook()
@@ -3745,6 +4156,313 @@ Identified topics: {len(topics)}
             except:
                 return "complete_export_failure"
 
+    # =============================================
+    # VISUALIZATION METHODS
+    # =============================================
+
+    def display_comprehensive_visualizations(self, combined_df: pd.DataFrame, source_articles_df: pd.DataFrame, 
+                                          comprehensive_results: Dict, analysis_type: str = "references"):
+        """Отображает комплексные визуализации для анализа"""
+        
+        st.header("📊 Comprehensive Visualizations")
+        
+        # Создаем вкладки для разных типов визуализаций
+        viz_tabs = st.tabs([
+            "📈 Overview Dashboard", 
+            "📅 Temporal Analysis", 
+            "🌍 Geographical Distribution",
+            "🔗 Network Analysis",
+            "📚 Journal & Author Analysis",
+            "🔤 Text Analysis"
+        ])
+        
+        with viz_tabs[0]:
+            self._display_overview_dashboard(combined_df, source_articles_df, analysis_type)
+        
+        with viz_tabs[1]:
+            self._display_temporal_analysis(combined_df, analysis_type)
+        
+        with viz_tabs[2]:
+            self._display_geographical_analysis(combined_df, analysis_type)
+        
+        with viz_tabs[3]:
+            self._display_network_analysis(comprehensive_results, analysis_type)
+        
+        with viz_tabs[4]:
+            self._display_journal_author_analysis(combined_df, analysis_type)
+        
+        with viz_tabs[5]:
+            self._display_text_analysis(combined_df, analysis_type)
+
+    def _display_overview_dashboard(self, combined_df: pd.DataFrame, source_articles_df: pd.DataFrame, analysis_type: str):
+        """Отображает обзорный дашборд"""
+        st.subheader("Overview Dashboard")
+        
+        # Создаем метрики
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            total_articles = len(combined_df)
+            st.metric("Total Articles", total_articles)
+        
+        with col2:
+            unique_articles = len(self.get_unique_references(combined_df)) if analysis_type == "references" else len(self.get_unique_citations(combined_df))
+            st.metric("Unique Articles", unique_articles)
+        
+        with col3:
+            if not source_articles_df.empty:
+                source_count = len(source_articles_df)
+                st.metric("Source Articles", source_count)
+            else:
+                st.metric("Source Articles", 0)
+        
+        with col4:
+            if not combined_df.empty and 'citation_count_openalex' in combined_df.columns:
+                avg_citations = combined_df['citation_count_openalex'].mean()
+                st.metric("Avg Citations", f"{avg_citations:.1f}")
+            else:
+                st.metric("Avg Citations", "N/A")
+        
+        # Создаем индикаторы метрик
+        metrics_data = {
+            'total_articles': len(combined_df),
+            'total_citations': combined_df['citation_count_openalex'].sum() if not combined_df.empty and 'citation_count_openalex' in combined_df.columns else 0,
+            'unique_authors': len(self.analyze_authors_frequency(combined_df)) if not combined_df.empty else 0,
+            'countries': len(self.analyze_countries_frequency(combined_df)) if not combined_df.empty else 0,
+            'journals': len(self.analyze_journals_frequency(combined_df)) if not combined_df.empty else 0,
+            'affiliations': len(self.analyze_affiliations_frequency(combined_df)) if not combined_df.empty else 0
+        }
+        
+        metrics_fig = self.visualization_manager.create_metrics_dashboard(metrics_data)
+        st.plotly_chart(metrics_fig, use_container_width=True)
+
+    def _display_temporal_analysis(self, combined_df: pd.DataFrame, analysis_type: str):
+        """Отображает временной анализ"""
+        st.subheader("Temporal Analysis")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # График распределения по годам
+            if analysis_type == "references":
+                year_data = self.analyze_year_distribution(combined_df)
+            else:
+                year_data = self.analyze_citation_year_distribution(combined_df)
+            
+            if not year_data.empty:
+                temporal_fig = self.visualization_manager.create_temporal_trends(
+                    year_data, 
+                    f"{analysis_type.title()} Publication Trends"
+                )
+                st.plotly_chart(temporal_fig, use_container_width=True)
+            else:
+                st.info("No temporal data available for visualization")
+        
+        with col2:
+            # График пятилетних периодов
+            if analysis_type == "references":
+                period_data = self.analyze_five_year_periods(combined_df)
+            else:
+                period_data = self.analyze_citation_five_year_periods(combined_df)
+            
+            if not period_data.empty:
+                fig = px.bar(
+                    period_data,
+                    x='period',
+                    y='frequency_total',
+                    title=f"{analysis_type.title()} Distribution by 5-Year Periods",
+                    labels={'frequency_total': 'Number of Publications', 'period': 'Time Period'}
+                )
+                fig.update_layout(template="plotly_white", height=400)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No period data available for visualization")
+        
+        # Анализ цитирований по годам
+        if not combined_df.empty and 'citation_count_openalex' in combined_df.columns and 'year' in combined_df.columns:
+            st.subheader("Citation Impact Over Time")
+            impact_fig = self.visualization_manager.create_citation_impact_plot(combined_df)
+            st.plotly_chart(impact_fig, use_container_width=True)
+
+    def _display_geographical_analysis(self, combined_df: pd.DataFrame, analysis_type: str):
+        """Отображает географический анализ"""
+        st.subheader("Geographical Distribution")
+        
+        # Получаем данные по странам
+        if analysis_type == "references":
+            country_data = self.analyze_countries_frequency(combined_df)
+        else:
+            country_data = self.analyze_citation_countries_frequency(combined_df)
+        
+        if not country_data.empty:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Хороплет карта
+                choropleth_fig = self.visualization_manager.create_country_choropleth(country_data)
+                if choropleth_fig:
+                    st.plotly_chart(choropleth_fig, use_container_width=True)
+                else:
+                    st.info("No geographical data available for map visualization")
+            
+            with col2:
+                # Топ стран
+                top_countries = country_data[country_data['type'] == 'single'].head(10)
+                if not top_countries.empty:
+                    fig = px.bar(
+                        top_countries,
+                        x='frequency_total',
+                        y='country_fullname',
+                        orientation='h',
+                        title="Top 10 Countries by Publications",
+                        labels={'frequency_total': 'Number of Publications', 'country_fullname': 'Country'}
+                    )
+                    fig.update_layout(template="plotly_white", height=400)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No country data available for bar chart")
+        else:
+            st.info("No geographical data available for visualization")
+
+    def _display_network_analysis(self, comprehensive_results: Dict, analysis_type: str):
+        """Отображает сетевой анализ"""
+        st.subheader("Network Analysis")
+        
+        if not comprehensive_results or not comprehensive_results.get('networks'):
+            st.info("No network data available for visualization")
+            return
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Сеть соавторства
+            coauthorship_data = self._prepare_coauthorship_data(comprehensive_results)
+            if not coauthorship_data.empty:
+                author_network_fig = self.visualization_manager.create_author_network(coauthorship_data)
+                st.plotly_chart(author_network_fig, use_container_width=True)
+            else:
+                st.info("No co-authorship network data available")
+        
+        with col2:
+            # Сеть аффилиаций
+            affiliation_data = self._prepare_affiliation_data(comprehensive_results)
+            if not affiliation_data.empty:
+                affiliation_fig = self.visualization_manager.create_affiliation_collaboration(affiliation_data)
+                st.plotly_chart(affiliation_fig, use_container_width=True)
+            else:
+                st.info("No affiliation network data available")
+        
+        # Дополнительные сетевые метрики
+        if comprehensive_results.get('metrics'):
+            st.subheader("Network Metrics")
+            metrics_df = self._prepare_network_metrics_data(comprehensive_results)
+            if not metrics_df.empty:
+                st.dataframe(metrics_df.head(10), use_container_width=True)
+
+    def _display_journal_author_analysis(self, combined_df: pd.DataFrame, analysis_type: str):
+        """Отображает анализ журналов и авторов"""
+        st.subheader("Journal and Author Analysis")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Топ журналов
+            if analysis_type == "references":
+                journal_data = self.analyze_journals_frequency(combined_df)
+            else:
+                journal_data = self.analyze_citation_journals_frequency(combined_df)
+            
+            if not journal_data.empty:
+                journal_fig = self.visualization_manager.create_journal_distribution(journal_data)
+                st.plotly_chart(journal_fig, use_container_width=True)
+            else:
+                st.info("No journal data available for visualization")
+        
+        with col2:
+            # Топ авторов
+            if analysis_type == "references":
+                author_data = self.analyze_authors_frequency(combined_df)
+            else:
+                author_data = self.analyze_citation_authors_frequency(combined_df)
+            
+            if not author_data.empty:
+                top_authors = author_data.head(10)
+                fig = px.bar(
+                    top_authors,
+                    x='frequency_total',
+                    y='author_with_initial',
+                    orientation='h',
+                    title="Top 10 Authors by Publications",
+                    labels={'frequency_total': 'Number of Publications', 'author_with_initial': 'Author'}
+                )
+                fig.update_layout(template="plotly_white", height=400)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No author data available for visualization")
+        
+        # Анализ аффилиаций
+        st.subheader("Affiliation Analysis")
+        if analysis_type == "references":
+            affiliation_data = self.analyze_affiliations_frequency(combined_df)
+        else:
+            affiliation_data = self.analyze_citation_affiliations_frequency(combined_df)
+        
+        if not affiliation_data.empty:
+            top_affiliations = affiliation_data.head(10)
+            fig = px.bar(
+                top_affiliations,
+                x='frequency_total',
+                y='affiliation',
+                orientation='h',
+                title="Top 10 Affiliations",
+                labels={'frequency_total': 'Number of Publications', 'affiliation': 'Organization'}
+            )
+            fig.update_layout(template="plotly_white", height=400)
+            st.plotly_chart(fig, use_container_width=True)
+
+    def _display_text_analysis(self, combined_df: pd.DataFrame, analysis_type: str):
+        """Отображает текстовый анализ"""
+        st.subheader("Text Analysis")
+        
+        # Анализ заголовков
+        if not combined_df.empty and 'title' in combined_df.columns:
+            titles = combined_df['title'].tolist()
+            content_freq, compound_freq, scientific_freq = self.analyze_titles(titles)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Облако слов для контентных слов
+                if content_freq:
+                    st.subheader("Content Words Word Cloud")
+                    wordcloud_fig = self.visualization_manager.create_word_cloud(content_freq, "Content Words")
+                    st.pyplot(wordcloud_fig)
+                else:
+                    st.info("No content words available for word cloud")
+            
+            with col2:
+                # Облако слов для составных слов
+                if compound_freq:
+                    st.subheader("Compound Words Word Cloud")
+                    compound_fig = self.visualization_manager.create_word_cloud(compound_freq, "Compound Words")
+                    st.pyplot(compound_fig)
+                else:
+                    st.info("No compound words available for word cloud")
+            
+            # Топ слова
+            st.subheader("Top Words Frequency")
+            if content_freq:
+                top_words = dict(content_freq.most_common(20))
+                fig = px.bar(
+                    x=list(top_words.values()),
+                    y=list(top_words.keys()),
+                    orientation='h',
+                    title="Top 20 Content Words",
+                    labels={'x': 'Frequency', 'y': 'Words'}
+                )
+                fig.update_layout(template="plotly_white", height=500)
+                st.plotly_chart(fig, use_container_width=True)
+
 # =============================================
 # STREAMLIT INTERFACE
 # =============================================
@@ -3809,7 +4527,7 @@ def main():
                             combined_references_df, pd.DataFrame(), source_articles_df
                         )
                         
-                        # Display results
+                        # Display results and visualizations
                         st.subheader("Analysis Results")
                         
                         col1, col2, col3 = st.columns(3)
@@ -3819,6 +4537,11 @@ def main():
                             st.metric("Unique DOIs", unique_dois)
                         with col3:
                             st.metric("Processed References", len(combined_references_df) if not combined_references_df.empty else 0)
+                        
+                        # Show comprehensive visualizations
+                        st.session_state.analyzer.display_comprehensive_visualizations(
+                            combined_references_df, source_articles_df, comprehensive_results, "references"
+                        )
                         
                         # Show source articles
                         if not source_articles_df.empty:
@@ -3900,7 +4623,7 @@ def main():
                             pd.DataFrame(), citing_articles_df, source_articles_df
                         )
                         
-                        # Display results
+                        # Display results and visualizations
                         st.subheader("Citing Articles Analysis Results")
                         
                         if citing_results:
@@ -3914,6 +4637,11 @@ def main():
                                 st.metric("Citation Relationships", total_citation_relationships)
                             with col3:
                                 st.metric("Unique Citing Articles", total_unique_citations)
+                            
+                            # Show comprehensive visualizations
+                            st.session_state.analyzer.display_comprehensive_visualizations(
+                                citing_articles_df, pd.DataFrame(), comprehensive_results, "citations"
+                            )
                             
                             st.subheader("Citations per Source Article")
                             for doi, data in citing_results.items():
@@ -3960,4 +4688,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
