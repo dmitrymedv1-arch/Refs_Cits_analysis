@@ -2368,6 +2368,9 @@ Affiliations normalized and grouped for consistent organization names
             bins = period_starts + [period_starts[-1] + 5]
             labels = [f"{s}-{s+4}" for s in period_starts]
     
+            # Создаем базовый DataFrame со всеми периодами
+            all_periods_df = pd.DataFrame({'period': labels})
+    
             # Обработка периодов для всех ссылок
             years_total = pd.to_numeric(references_df['year'], errors='coerce')
             years_total = years_total[years_total.notna() & years_total.between(1900, current_year)]
@@ -2392,23 +2395,99 @@ Affiliations normalized and grouped for consistent organization names
             else:
                 period_df_unique = pd.DataFrame(columns=['period', 'frequency_unique', 'percentage_unique'])
     
-            # Объединяем результаты
-            if not period_df_total.empty and not period_df_unique.empty:
-                period_df = period_df_total.merge(period_df_unique, on='period', how='outer').fillna(0)
-            elif not period_df_total.empty:
-                period_df = period_df_total.copy()
-                period_df['frequency_unique'] = 0
-                period_df['percentage_unique'] = 0.0
-            elif not period_df_unique.empty:
-                period_df = period_df_unique.copy()
+            # Объединяем с базовым DataFrame, чтобы включить все периоды
+            period_df = all_periods_df.copy()
+            
+            if not period_df_total.empty:
+                period_df = period_df.merge(period_df_total, on='period', how='left')
+            else:
                 period_df['frequency_total'] = 0
                 period_df['percentage_total'] = 0.0
+                
+            if not period_df_unique.empty:
+                period_df = period_df.merge(period_df_unique, on='period', how='left')
             else:
-                return pd.DataFrame(columns=['period', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique'])
+                period_df['frequency_unique'] = 0
+                period_df['percentage_unique'] = 0.0
     
-            return period_df[['period', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique']].sort_values('period', ascending=False)
+            # Заполняем NaN значения нулями
+            period_df = period_df.fillna(0)
+            
+            # Сортируем от новых к старым
+            period_df = period_df.sort_values('period', ascending=False)
+    
+            return period_df[['period', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique']]
         except Exception as e:
             st.error(f"Error in analyze_five_year_periods: {e}")
+            return pd.DataFrame()
+    
+    def analyze_citation_five_year_periods(self, citations_df: pd.DataFrame) -> pd.DataFrame:
+        """Analysis of five-year periods for citing articles (from new to old)"""
+        try:
+            if citations_df.empty:
+                return pd.DataFrame()
+    
+            total_citations = len(citations_df)
+            unique_df = self.get_unique_citations(citations_df)
+            total_unique = len(unique_df)
+    
+            start_year = 1900
+            current_year = datetime.now().year + 4
+            period_starts = list(range(start_year, current_year + 1, 5))
+            bins = period_starts + [period_starts[-1] + 5]
+            labels = [f"{s}-{s+4}" for s in period_starts]
+    
+            # Создаем базовый DataFrame со всеми периодами
+            all_periods_df = pd.DataFrame({'period': labels})
+    
+            # Обработка периодов для всех цитирований
+            years_total = pd.to_numeric(citations_df['year'], errors='coerce')
+            years_total = years_total[years_total.notna() & years_total.between(1900, current_year)]
+            if not years_total.empty:
+                years_total = years_total.astype(int)
+                period_counts_total = pd.cut(years_total, bins=bins, labels=labels, right=False)
+                period_df_total = period_counts_total.value_counts().reset_index()
+                period_df_total.columns = ['period', 'frequency_total']
+                period_df_total['percentage_total'] = round(period_df_total['frequency_total'] / total_citations * 100, 2)
+            else:
+                period_df_total = pd.DataFrame(columns=['period', 'frequency_total', 'percentage_total'])
+    
+            # Обработка периодов для уникальных цитирований
+            years_unique = pd.to_numeric(unique_df['year'], errors='coerce')
+            years_unique = years_unique[years_unique.notna() & years_unique.between(1900, current_year)]
+            if not years_unique.empty:
+                years_unique = years_unique.astype(int)
+                period_counts_unique = pd.cut(years_unique, bins=bins, labels=labels, right=False)
+                period_df_unique = period_counts_unique.value_counts().reset_index()
+                period_df_unique.columns = ['period', 'frequency_unique']
+                period_df_unique['percentage_unique'] = round(period_df_unique['frequency_unique'] / total_unique * 100, 2)
+            else:
+                period_df_unique = pd.DataFrame(columns=['period', 'frequency_unique', 'percentage_unique'])
+    
+            # Объединяем с базовым DataFrame, чтобы включить все периоды
+            period_df = all_periods_df.copy()
+            
+            if not period_df_total.empty:
+                period_df = period_df.merge(period_df_total, on='period', how='left')
+            else:
+                period_df['frequency_total'] = 0
+                period_df['percentage_total'] = 0.0
+                
+            if not period_df_unique.empty:
+                period_df = period_df.merge(period_df_unique, on='period', how='left')
+            else:
+                period_df['frequency_unique'] = 0
+                period_df['percentage_unique'] = 0.0
+    
+            # Заполняем NaN значения нулями
+            period_df = period_df.fillna(0)
+            
+            # Сортируем от новых к старым
+            period_df = period_df.sort_values('period', ascending=False)
+    
+            return period_df[['period', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique']]
+        except Exception as e:
+            st.error(f"Error in analyze_citation_five_year_periods: {e}")
             return pd.DataFrame()
 
     def find_duplicate_references(self, references_df: pd.DataFrame) -> pd.DataFrame:
@@ -2871,4 +2950,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
