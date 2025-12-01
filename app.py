@@ -2175,7 +2175,7 @@ class CitationAnalyzer:
     def create_topic_journal_heatmap_data(self, articles_df: pd.DataFrame, topic_analysis: Dict) -> pd.DataFrame:
         """Создает данные для тепловой карты распределения тем по журналам"""
         try:
-            if articles_df.empty or not topic_analysis or not topic_analysis.get('dominant_topics'):
+            if articles_df.empty or not topic_analysis or len(topic_analysis.get('dominant_topics', [])) == 0:
                 return pd.DataFrame()
                 
             heatmap_data = []
@@ -2216,7 +2216,7 @@ class CitationAnalyzer:
     def analyze_temporal_topic_trends(self, articles_df: pd.DataFrame, topic_analysis: Dict) -> pd.DataFrame:
         """Анализ временных трендов тем"""
         try:
-            if articles_df.empty or not topic_analysis or not topic_analysis.get('dominant_topics'):
+            if articles_df.empty or not topic_analysis or len(topic_analysis.get('dominant_topics', [])) == 0:
                 return pd.DataFrame()
                 
             trends_data = []
@@ -3366,7 +3366,7 @@ Affiliations normalized and grouped for consistent organization names
             
             # Объединяем все годы и фильтруем корректные
             all_years = pd.concat([all_years_total, all_years_unique])
-            valid_years = all_years[all_years.notna() & all_years.between(1900, 2026)].astype(int).unique()
+            valid_years = all_years[all_years.notna() & all_years.between(1900, 2026)].ast(int).unique()
             
             if len(valid_years) == 0:
                 return pd.DataFrame(columns=['year', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique'])
@@ -4240,6 +4240,15 @@ Identified topics: {len(topics)}
         """Отображает временной анализ"""
         st.subheader("Temporal Analysis")
         
+        # ВРЕМЕННЫЙ ОТЛАДОЧНЫЙ ВЫВОД
+        st.write("🔍 DEBUG: DataFrame info for temporal analysis:")
+        st.write(f"Columns: {list(combined_df.columns)}")
+        st.write(f"Shape: {combined_df.shape}")
+        if 'year' in combined_df.columns:
+            st.write(f"Year values sample: {combined_df['year'].head(10).tolist()}")
+            st.write(f"Year data types: {combined_df['year'].dtype}")
+            st.write(f"Non-null year values: {combined_df['year'].notna().sum()}")
+        
         col1, col2 = st.columns(2)
         
         with col1:
@@ -4248,6 +4257,8 @@ Identified topics: {len(topics)}
                 year_data = self.analyze_year_distribution(combined_df)
             else:
                 year_data = self.analyze_citation_year_distribution(combined_df)
+            
+            st.write(f"🔍 Year data shape: {year_data.shape if not year_data.empty else 'Empty'}")
             
             if not year_data.empty:
                 temporal_fig = self.visualization_manager.create_temporal_trends(
@@ -4264,6 +4275,8 @@ Identified topics: {len(topics)}
                 period_data = self.analyze_five_year_periods(combined_df)
             else:
                 period_data = self.analyze_citation_five_year_periods(combined_df)
+            
+            st.write(f"🔍 Period data shape: {period_data.shape if not period_data.empty else 'Empty'}")
             
             if not period_data.empty:
                 fig = px.bar(
@@ -4288,11 +4301,19 @@ Identified topics: {len(topics)}
         """Отображает географический анализ"""
         st.subheader("Geographical Distribution")
         
+        # ВРЕМЕННЫЙ ОТЛАДОЧНЫЙ ВЫВОД
+        st.write("🔍 DEBUG: Checking geographical data...")
+        if 'countries' in combined_df.columns:
+            st.write(f"Countries column sample: {combined_df['countries'].head(10).tolist()}")
+            st.write(f"Non-null countries: {combined_df['countries'].notna().sum()}")
+        
         # Получаем данные по странам
         if analysis_type == "references":
             country_data = self.analyze_countries_frequency(combined_df)
         else:
             country_data = self.analyze_citation_countries_frequency(combined_df)
+        
+        st.write(f"🔍 Country data shape: {country_data.shape if not country_data.empty else 'Empty'}")
         
         if not country_data.empty:
             col1, col2 = st.columns(2)
@@ -4328,6 +4349,16 @@ Identified topics: {len(topics)}
         """Отображает сетевой анализ"""
         st.subheader("Network Analysis")
         
+        # ВРЕМЕННЫЙ ОТЛАДОЧНЫЙ ВЫВОД
+        st.write("🔍 DEBUG: Comprehensive results structure:")
+        if comprehensive_results:
+            st.write(f"Networks available: {list(comprehensive_results.get('networks', {}).keys())}")
+            for network_type, network in comprehensive_results.get('networks', {}).items():
+                if network:
+                    st.write(f"{network_type}: {len(network)} nodes, {network.number_of_edges()} edges")
+        else:
+            st.write("No comprehensive results available")
+        
         if not comprehensive_results or not comprehensive_results.get('networks'):
             st.info("No network data available for visualization")
             return
@@ -4337,6 +4368,8 @@ Identified topics: {len(topics)}
         with col1:
             # Сеть соавторства
             coauthorship_data = self._prepare_coauthorship_data(comprehensive_results)
+            st.write(f"🔍 Coauthorship data shape: {coauthorship_data.shape if not coauthorship_data.empty else 'Empty'}")
+            
             if not coauthorship_data.empty:
                 author_network_fig = self.visualization_manager.create_author_network(coauthorship_data)
                 st.plotly_chart(author_network_fig, use_container_width=True)
@@ -4346,6 +4379,8 @@ Identified topics: {len(topics)}
         with col2:
             # Сеть аффилиаций
             affiliation_data = self._prepare_affiliation_data(comprehensive_results)
+            st.write(f"🔍 Affiliation data shape: {affiliation_data.shape if not affiliation_data.empty else 'Empty'}")
+            
             if not affiliation_data.empty:
                 affiliation_fig = self.visualization_manager.create_affiliation_collaboration(affiliation_data)
                 st.plotly_chart(affiliation_fig, use_container_width=True)
@@ -4363,6 +4398,13 @@ Identified topics: {len(topics)}
         """Отображает анализ журналов и авторов"""
         st.subheader("Journal and Author Analysis")
         
+        # ВРЕМЕННЫЙ ОТЛАДОЧНЫЙ ВЫВОД
+        st.write("🔍 DEBUG: Checking journal and author data...")
+        if 'journal_abbreviation' in combined_df.columns:
+            st.write(f"Journal column sample: {combined_df['journal_abbreviation'].head(10).tolist()}")
+        if 'authors_with_initials' in combined_df.columns:
+            st.write(f"Authors column sample: {combined_df['authors_with_initials'].head(5).tolist()}")
+        
         col1, col2 = st.columns(2)
         
         with col1:
@@ -4371,6 +4413,8 @@ Identified topics: {len(topics)}
                 journal_data = self.analyze_journals_frequency(combined_df)
             else:
                 journal_data = self.analyze_citation_journals_frequency(combined_df)
+            
+            st.write(f"🔍 Journal data shape: {journal_data.shape if not journal_data.empty else 'Empty'}")
             
             if not journal_data.empty:
                 journal_fig = self.visualization_manager.create_journal_distribution(journal_data)
@@ -4384,6 +4428,8 @@ Identified topics: {len(topics)}
                 author_data = self.analyze_authors_frequency(combined_df)
             else:
                 author_data = self.analyze_citation_authors_frequency(combined_df)
+            
+            st.write(f"🔍 Author data shape: {author_data.shape if not author_data.empty else 'Empty'}")
             
             if not author_data.empty:
                 top_authors = author_data.head(10)
@@ -4407,6 +4453,8 @@ Identified topics: {len(topics)}
         else:
             affiliation_data = self.analyze_citation_affiliations_frequency(combined_df)
         
+        st.write(f"🔍 Affiliation data shape: {affiliation_data.shape if not affiliation_data.empty else 'Empty'}")
+        
         if not affiliation_data.empty:
             top_affiliations = affiliation_data.head(10)
             fig = px.bar(
@@ -4424,10 +4472,18 @@ Identified topics: {len(topics)}
         """Отображает текстовый анализ"""
         st.subheader("Text Analysis")
         
+        # ВРЕМЕННЫЙ ОТЛАДОЧНЫЙ ВЫВОД
+        st.write("🔍 DEBUG: Checking text data...")
+        if 'title' in combined_df.columns:
+            st.write(f"Title column sample: {combined_df['title'].head(5).tolist()}")
+            st.write(f"Non-null titles: {combined_df['title'].notna().sum()}")
+        
         # Анализ заголовков
         if not combined_df.empty and 'title' in combined_df.columns:
             titles = combined_df['title'].tolist()
             content_freq, compound_freq, scientific_freq = self.analyze_titles(titles)
+            
+            st.write(f"🔍 Content words: {len(content_freq)}, Compound words: {len(compound_freq)}, Scientific stopwords: {len(scientific_freq)}")
             
             col1, col2 = st.columns(2)
             
