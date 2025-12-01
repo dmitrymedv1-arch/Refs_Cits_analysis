@@ -3366,7 +3366,7 @@ Affiliations normalized and grouped for consistent organization names
             
             # Объединяем все годы и фильтруем корректные
             all_years = pd.concat([all_years_total, all_years_unique])
-            valid_years = all_years[all_years.notna() & all_years.between(1900, 2026)].ast(int).unique()
+            valid_years = all_years[all_years.notna() & all_years.between(1900, 2026)].astype(int).unique()
             
             if len(valid_years) == 0:
                 return pd.DataFrame(columns=['year', 'frequency_total', 'percentage_total', 'frequency_unique', 'percentage_unique'])
@@ -4744,3 +4744,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
