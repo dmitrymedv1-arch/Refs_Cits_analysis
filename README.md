@@ -1,28 +1,14 @@
-\# 📚 Анализатор научных статей по DOI - Streamlit версия
+📚 Scientific Article Analyzer by DOI - Streamlit Version
+Complete analysis of scientific articles with detection of unethical citation practices.
 
+🚀 Quick Start
+📋 Features
+Smart caching at all levels
 
+4 levels of unethical practice analysis
 
-Полный анализ научных статей с обнаружением неэтичных практик цитирования.
+25+ tabs in Excel report
 
+Parallel processing up to 10 threads
 
-
-\## 🚀 Быстрый старт
-
-
-
-
-
-\## 📋 Функционал
-
-
-
-\- Умное кэширование всех уровней
-
-\- 4 уровня анализа неэтичных практик
-
-\- 25+ вкладок в Excel отчете
-
-\- Параллельная обработка до 10 потоков
-
-\- Сетевой анализ и ML-детекция аномалий
-
+Network analysis and ML anomaly detection
