@@ -37,6 +37,7 @@ from io import BytesIO
 import joblib
 from fuzzywuzzy import fuzz
 import concurrent.futures
+import html as html_module
 
 # Streamlit page configuration
 st.set_page_config(
@@ -827,26 +828,39 @@ def cached_fetch_article_data(doi: str, crossref_client,
                              openalex_client, 
                              state_manager: AnalysisStateManager) -> Tuple[Dict, Dict]:
     """
-    Cached fetching of article data from APIs with multi-level caching
+    Параллельное получение данных с обоих API
     """
-    # Check session state cache first (fastest)
+    # Проверка кэша сессии
     cached = state_manager.get_cached_result(doi, 'unified')
     if cached:
         return cached.get('crossref', {}), cached.get('openalex', {})
     
-    # Check in-memory caches
+    # Проверка in-memory кэша
     if doi in _crossref_article_cache and doi in _openalex_article_cache:
         return _crossref_article_cache[doi], _openalex_article_cache[doi]
     
-    # Fetch from APIs
-    crossref_data = crossref_client.fetch_article(doi)
-    openalex_data = openalex_client.fetch_article(doi)
+    # Параллельное получение
+    crossref_data = {}
+    openalex_data = {}
     
-    # Cache in memory
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        crossref_future = executor.submit(crossref_client.fetch_article, doi)
+        openalex_future = executor.submit(openalex_client.fetch_article, doi)
+        
+        try:
+            crossref_data = crossref_future.result(timeout=12)
+        except:
+            crossref_data = {"error": "Timeout"}
+        
+        try:
+            openalex_data = openalex_future.result(timeout=10)
+        except:
+            openalex_data = {"error": "Timeout"}
+    
+    # Кэширование
     _crossref_article_cache[doi] = crossref_data
     _openalex_article_cache[doi] = openalex_data
     
-    # Cache in session state
     unified_data = {
         'crossref': crossref_data,
         'openalex': openalex_data,
@@ -860,33 +874,38 @@ def cached_get_citing_works(doi: str, openalex_client,
                           source_type: str = "analyzed",
                           state_manager: AnalysisStateManager = None) -> List[str]:
     """
-    Cached fetching of citing works with intelligent caching
+    Быстрое получение цитирующих работ с ограничениями
     """
     cache_key = f"citing:{doi}:{source_type}"
     
-    # Check relationship cache
+    # Проверка кэша
     if cache_key in _citing_works_cache:
         _cache_stats['hits'] += 1
         return _citing_works_cache[cache_key]
     
-    # Check session state cache
     if state_manager and doi in state_manager.citing_cache:
         _cache_stats['hits'] += 1
         return state_manager.citing_cache[doi]
     
     _cache_stats['misses'] += 1
     
-    # Fetch citing works
+    # Быстрое получение с ограничениями
     if source_type == "analyzed":
+        # Для анализируемых статей - ограниченный сбор
         citing_works = openalex_client.fetch_all_citations_for_analyzed_article(doi)
+        # Ограничиваем количество для скорости
+        if len(citing_works) > 1500:
+            citing_works = citing_works[:1500]
     else:
+        # Для вспомогательных - только одна страница
         citing_works = openalex_client.fetch_citations(doi)
+        if len(citing_works) > 200:
+            citing_works = citing_works[:200]
     
-    # Cache in memory
+    # Кэширование
     _citing_works_cache[cache_key] = citing_works
     _cache_stats['saves'] += 1
     
-    # Cache in session state
     if state_manager:
         state_manager.citing_cache[doi] = citing_works
         state_manager.save_to_session()
@@ -896,28 +915,31 @@ def cached_get_citing_works(doi: str, openalex_client,
 def cached_get_references(doi: str, crossref_client,
                         state_manager: AnalysisStateManager = None) -> List[str]:
     """
-    Cached fetching of references
+    Быстрое получение ссылок с таймаутом
     """
-    # Check in-memory cache
+    # Проверка кэша
     if doi in _reference_works_cache:
         _cache_stats['hits'] += 1
         return _reference_works_cache[doi]
     
-    # Check session state cache
     if state_manager and doi in state_manager.reference_cache:
         _cache_stats['hits'] += 1
         return state_manager.reference_cache[doi]
     
     _cache_stats['misses'] += 1
     
-    # Fetch references
-    references = crossref_client.fetch_references(doi)
+    # Быстрое получение с таймаутом
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(crossref_client.fetch_references, doi)
+            references = future.result(timeout=10)  # Жесткий таймаут 10 секунд
+    except Exception:
+        references = []
     
-    # Cache in memory
+    # Кэширование
     _reference_works_cache[doi] = references
     _cache_stats['saves'] += 1
     
-    # Cache in session state
     if state_manager:
         state_manager.reference_cache[doi] = references
         state_manager.save_to_session()
@@ -945,11 +967,11 @@ def get_cache_stats() -> Dict:
 # ============================================================================
 
 class AdaptiveDelayManager:
-    def __init__(self, initial_delay: float = Config.INITIAL_DELAY):
+    def __init__(self, initial_delay: float = 0.05):  # Уменьшен initial_delay
         self.initial_delay = initial_delay
         self.current_delay = initial_delay
-        self.max_delay = Config.MAX_DELAY
-        self.min_delay = Config.MIN_DELAY
+        self.max_delay = 2.0  # Уменьшен max_delay с Config.MAX_DELAY (было 1.0)
+        self.min_delay = 0.02  # Уменьшен min_delay
         self.success_count = 0
         self.failure_count = 0
         self.last_request_time = 0
@@ -980,7 +1002,7 @@ class AdaptiveDelayManager:
 
         if response_time:
             self.response_times.append(response_time)
-            if len(self.response_times) > 10:
+            if len(self.response_times) > 5:  # Уменьшено с 10
                 self.response_times.pop(0)
             self.stats['avg_response_time'] = sum(self.response_times) / len(self.response_times)
 
@@ -990,7 +1012,7 @@ class AdaptiveDelayManager:
             self.stats['successful_requests'] += 1
 
             if self.success_count >= 2:
-                self.current_delay = max(self.min_delay, self.current_delay * 0.7)
+                self.current_delay = max(self.min_delay, self.current_delay * 0.6)  # Более агрессивное уменьшение
                 self.success_count = 0
 
         else:
@@ -998,7 +1020,7 @@ class AdaptiveDelayManager:
             self.success_count = 0
             self.stats['failed_requests'] += 1
 
-            self.current_delay = min(self.max_delay, self.current_delay * 1.3)
+            self.current_delay = min(self.max_delay, self.current_delay * 1.5)  # Меньший множитель
 
         self.current_delay = min(self.max_delay, self.current_delay)
 
@@ -1443,73 +1465,63 @@ class OpenAlexClient(APIClient):
 
     def fetch_all_citations_for_analyzed_article(self, doi: str) -> List[str]:
         """
-        Complete collection of ALL citations for analyzed articles
-        Uses cursor-based pagination with timeout protection
+        Быстрый сбор ВСЕХ цитирований для анализируемых статей
+        Оптимизирован: уменьшен таймаут, ограничено количество страниц, ранний выход
         """
         clean_doi = self._clean_doi(doi)
         if not clean_doi:
             return []
-    
-        # Check cache for full citations
+        
+        # Проверяем кэш
         cache_key = f"full_citations:{clean_doi}"
         cached_result = self.cache.get("full_citations", cache_key)
         if cached_result is not None:
             return cached_result
-    
+        
         try:
-            # First get work_id from DOI with timeout
+            # Быстрое получение work_id с малым таймаутом
             article_data = self.fetch_article(clean_doi)
             
-            # Check if article_data is valid
-            if not isinstance(article_data, dict):
-                return []
-                
-            if 'error' in article_data:
+            if not isinstance(article_data, dict) or 'error' in article_data:
                 return []
             
-            # Try to get work ID from different possible structures
+            # Извлечение work_id из разных источников
             article_id = None
             
-            # Try direct id field
             if 'id' in article_data:
                 article_id = article_data.get('id', '').split('/')[-1]
             
-            # Try alternative structure with timeout protection
             if not article_id and 'doi' in article_data:
-                url = f"https://api.openalex.org/works/https://doi.org/{clean_doi}"
                 try:
-                    response = self.session.get(url, timeout=15)
+                    url = f"https://api.openalex.org/works/https://doi.org/{clean_doi}"
+                    response = self.session.get(url, timeout=10)  # Уменьшен таймаут
                     if response.status_code == 200:
                         data = response.json()
                         if 'id' in data:
                             article_id = data['id'].split('/')[-1]
-                except requests.exceptions.Timeout:
-                    print(f"Timeout getting work ID for {clean_doi}")
-                    return []
-                except Exception:
+                except:
                     pass
             
             if not article_id:
                 return []
-    
+            
             all_citing_dois = []
             cursor = "*"
             page_num = 1
             max_retries = 2
-            max_pages = 30  # Reduced from 50 to prevent timeout (6000 citations max)
-            total_collected = 0
+            max_pages = 10  # Уменьшено с 30 до 10 (максимум 2000 цитирований)
+            max_total_citations = 1500  # Жесткий лимит для скорости
             consecutive_errors = 0
             
-            # Use a new session for each article to avoid connection issues
             with requests.Session() as session:
                 session.headers.update({
-                    'User-Agent': 'ArticleAnalyzer/3.0 (colab-user@example.com)',
+                    'User-Agent': 'ArticleAnalyzer/3.0 (fast-mode)',
                     'Accept': 'application/json',
                     'Accept-Encoding': 'gzip'
                 })
-                session.timeout = 25  # Overall timeout for session
+                session.timeout = 15  # Уменьшен общий таймаут
                 
-                while cursor and page_num <= max_pages:
+                while cursor and page_num <= max_pages and len(all_citing_dois) < max_total_citations:
                     success = False
                     page_cursor = cursor
                     
@@ -1517,88 +1529,72 @@ class OpenAlexClient(APIClient):
                         try:
                             url = f"https://api.openalex.org/works?filter=cites:{article_id}&per-page=200&cursor={page_cursor}"
                             
-                            # Wait before request
                             self.delay.wait_if_needed()
                             
                             start_time = time.time()
-                            response = session.get(url, timeout=25)
+                            response = session.get(url, timeout=12)  # Уменьшен таймаут
                             response_time = time.time() - start_time
-    
+                            
                             if response.status_code == 200:
                                 self.delay.update_delay(True, response_time)
                                 data = response.json()
-    
+                                
                                 if not isinstance(data, dict):
                                     break
-    
+                                
                                 works = data.get('results', [])
                                 
                                 if not works:
                                     cursor = None
                                     success = True
                                     break
-    
+                                
                                 page_citing_dois = []
                                 for work in works:
                                     if isinstance(work, dict) and work.get('doi'):
                                         citing_doi = self._clean_doi(work['doi'])
                                         if citing_doi:
                                             page_citing_dois.append(citing_doi)
-    
-                                all_citing_dois.extend(page_citing_dois)
-                                total_collected += len(page_citing_dois)
                                 
-                                # Reset consecutive errors on success
+                                all_citing_dois.extend(page_citing_dois)
                                 consecutive_errors = 0
-    
-                                # Get next cursor
+                                
                                 meta = data.get('meta', {})
                                 next_cursor = meta.get('next_cursor')
-    
+                                
                                 if next_cursor and next_cursor != page_cursor and page_num < max_pages:
                                     cursor = next_cursor
                                     page_num += 1
-                                    # Add delay between pages
-                                    time.sleep(0.3)
+                                    time.sleep(0.2)  # Меньшая задержка
                                     success = True
                                     break
                                 else:
                                     cursor = None
                                     success = True
                                     break
-    
+                            
                             elif response.status_code == 429:
                                 self.delay.update_delay(False, response_time)
-                                wait_time = min(2 ** attempt, 4)  # Exponential backoff capped at 4 seconds
+                                wait_time = min(2 ** attempt, 3)  # Максимум 3 секунды
                                 time.sleep(wait_time)
                                 continue
-    
-                            elif response.status_code == 404:
-                                # Article not found
+                            
+                            elif response.status_code in [404, 400]:
                                 cursor = None
                                 success = True
                                 break
-    
+                            
                             else:
                                 self.delay.update_delay(False, response_time)
                                 consecutive_errors += 1
                                 if attempt < max_retries - 1:
-                                    time.sleep(1)
+                                    time.sleep(0.5)
                                     continue
                                 else:
                                     success = False
                                     break
-    
+                        
                         except requests.exceptions.Timeout:
-                            consecutive_errors += 1
-                            if attempt < max_retries - 1:
-                                time.sleep(2)
-                                continue
-                            else:
-                                success = False
-                                break
-                                
-                        except Exception as e:
                             consecutive_errors += 1
                             if attempt < max_retries - 1:
                                 time.sleep(1)
@@ -1606,29 +1602,31 @@ class OpenAlexClient(APIClient):
                             else:
                                 success = False
                                 break
-    
-                    # If too many consecutive errors, stop pagination
-                    if consecutive_errors >= 5:
-                        print(f"Too many consecutive errors for {clean_doi}, stopping")
-                        break
                         
+                        except Exception as e:
+                            consecutive_errors += 1
+                            if attempt < max_retries - 1:
+                                time.sleep(0.5)
+                                continue
+                            else:
+                                success = False
+                                break
+                    
+                    if consecutive_errors >= 3:
+                        break
+                    
                     if not success:
                         break
             
-            # Remove duplicates and save to cache
-            unique_citing_dois = list(set(all_citing_dois))
+            # Быстрая дедупликация
+            unique_citing_dois = list(dict.fromkeys(all_citing_dois))
             
-            # Log for debugging
-            if len(unique_citing_dois) > 0:
-                print(f"Collected {len(unique_citing_dois)} citations for {clean_doi}")
-    
-            # Save to cache with separate category for full citations
+            # Сохраняем в кэш
             self.cache.set("full_citations", cache_key, unique_citing_dois, category="full_citations_analyzed")
             
             return unique_citing_dois
-    
+        
         except Exception as e:
-            # Log error but don't crash - return empty list
             print(f"Error collecting citations for {clean_doi}: {str(e)}")
             return []
 
@@ -2545,46 +2543,43 @@ class OptimizedDOIProcessor:
                                     original_doi: str = None, fetch_refs: bool = True,
                                     fetch_cites: bool = True, batch_size: int = Config.BATCH_SIZE,
                                     progress_container=None, resume: bool = False) -> Dict[str, Dict]:
-    
-        # Set current stage in state manager
+        """
+        Оптимизированная пакетная обработка с возобновлением
+        """
+        # Уменьшаем размер пакета для большей скорости
+        batch_size = min(batch_size, Config.BATCH_SIZE) 
+        
         self.state_manager.set_stage(source_type, len(dois))
         
-        # Check if can resume from interrupted point
         if resume and source_type in self.stage_progress:
             if self.stage_progress[source_type]['remaining']:
-                # Continue from interrupted point
                 dois = self.stage_progress[source_type]['remaining']
-                if progress_container:
-                    progress_container.info(f"🔄 Resuming {source_type} processing with {len(dois)} remaining DOI")
             else:
-                # No saved progress, start from beginning
                 self.stage_progress[source_type] = {'processed': [], 'remaining': dois}
         else:
-            # Normal start
             self.stage_progress[source_type] = {'processed': [], 'remaining': dois}
-    
+        
         results = {}
         total_batches = (len(dois) + batch_size - 1) // batch_size
-    
+        
         if progress_container:
             status_text = progress_container.text(f"🔧 Processing {len(dois)} DOI (source: {source_type})")
             progress_bar = progress_container.progress(0)
         else:
             status_text = None
             progress_bar = None
-    
+        
         monitor = ProgressMonitor(len(dois), f"Processing {source_type}", progress_bar, status_text)
-    
+        
         try:
             for batch_idx in range(0, len(dois), batch_size):
                 batch = dois[batch_idx:batch_idx + batch_size]
                 
-                # Check which DOI are already cached
+                # Предварительная проверка кэша
                 batch_to_process = []
                 cached_results = {}
                 
                 for doi in batch:
-                    # Check session state cache
                     if source_type == 'analyzed' and doi in self.state_manager.analyzed_results:
                         cached_results[doi] = self.state_manager.analyzed_results[doi]
                         self.stats['session_state_hits'] += 1
@@ -2597,68 +2592,91 @@ class OptimizedDOIProcessor:
                     else:
                         batch_to_process.append(doi)
                 
-                # Add cached results
                 results.update(cached_results)
                 
-                # Process only non-cached DOI
+                # ОПТИМИЗАЦИЯ: Обрабатываем весь пакет параллельно
                 if batch_to_process:
-                    batch_results = self._process_single_batch_with_retry(
-                        batch_to_process, source_type, original_doi, True, True
+                    batch_results = self._process_batch_parallel(
+                        batch_to_process, source_type, original_doi, fetch_refs, fetch_cites
                     )
                     results.update(batch_results)
-    
-                # Update progress
+                
+                # Обновление прогресса
                 processed_batch = list(batch_to_process) + list(cached_results.keys())
                 self.stage_progress[source_type]['processed'].extend(processed_batch)
                 self.stage_progress[source_type]['remaining'] = dois[batch_idx + batch_size:]
                 
-                # Update state manager
                 self.state_manager.update_progress(
                     batch_idx // batch_size + 1,
                     self.stage_progress[source_type]['processed'],
                     self.stage_progress[source_type]['remaining']
                 )
                 
-                # CRITICAL FIX: Save progress to cache after each batch
                 self.cache.save_progress(
                     source_type,
                     self.stage_progress[source_type]['processed'],
                     self.stage_progress[source_type]['remaining']
                 )
                 
-                # CRITICAL FIX: Save session state after each batch
                 self.state_manager.save_to_session()
-    
                 monitor.update(len(batch), 'processed')
-    
-            # Clear saved progress after successful completion
+            
+            # Очистка после успешного завершения
             self.stage_progress[source_type] = {'processed': [], 'remaining': []}
             self.cache.clear_progress()
-            
-            # Update state manager
             self.state_manager.current_stage = None
             self.state_manager.save_to_session()
-    
+            
             monitor.complete()
-    
+            
             successful = sum(1 for r in results.values() if r.get('status') == 'success')
             failed = len(dois) - successful
-    
+            
             self.stats['total_processed'] += len(dois)
             self.stats['successful'] += successful
             self.stats['failed'] += failed
-    
+            
             return results
-    
+        
         except Exception as e:
-            # Save progress on exception
             if progress_container:
                 progress_container.warning(f"⚠️ {source_type} processing interrupted: {e}")
                 progress_container.info(f"📊 Progress saved. Can resume from interruption point.")
             
-            # Ensure state is saved
             self.state_manager.save_to_session()
             return results
+    
+    def _process_batch_parallel(self, batch: List[str], source_type: str,
+                               original_doi: str, fetch_refs: bool, fetch_cites: bool) -> Dict[str, Dict]:
+        """
+        Параллельная обработка целого пакета DOI
+        """
+        results = {}
+        
+        with ThreadPoolExecutor(max_workers=min(Config.MAX_WORKERS, len(batch), 7)) as executor:
+            future_to_doi = {}
+            
+            for doi in batch:
+                future = executor.submit(
+                    self._process_single_doi_optimized,
+                    doi, source_type, original_doi, fetch_refs, fetch_cites
+                )
+                future_to_doi[future] = doi
+            
+            for future in as_completed(future_to_doi):
+                doi = future_to_doi[future]
+                try:
+                    result = future.result(timeout=30)
+                    results[doi] = result
+                except Exception as e:
+                    self._handle_processing_error(doi, str(e), source_type, original_doi)
+                    results[doi] = {
+                        'doi': doi,
+                        'status': 'failed',
+                        'error': f"Processing timeout: {str(e)}"
+                    }
+        
+        return results
 
     def _process_single_batch_with_retry(self, batch: List[str], source_type: str,
                                        original_doi: str, fetch_refs: bool, fetch_cites: bool) -> Dict[str, Dict]:
@@ -2816,8 +2834,14 @@ class OptimizedDOIProcessor:
 
     def _process_single_doi_optimized(self, doi: str, source_type: str,
                                      original_doi: str, fetch_refs: bool, fetch_cites: bool) -> Dict:
-    
-        # Check if already processed in this session
+        """
+        Оптимизированная обработка одного DOI
+        - Минимальные таймауты
+        - Быстрое извлечение только основных данных
+        - Отложенная сложная обработка
+        """
+        
+        # Проверка быстрого кэша
         if source_type == 'analyzed' and doi in self.state_manager.analyzed_results:
             self.stats['session_state_hits'] += 1
             return self.state_manager.analyzed_results[doi]
@@ -2827,171 +2851,308 @@ class OptimizedDOIProcessor:
         elif source_type == 'citing' and doi in self.state_manager.citing_results:
             self.stats['session_state_hits'] += 1
             return self.state_manager.citing_results[doi]
-    
+        
+        # Проверка дискового кэша
         cache_key = f"full_result:{doi}"
         cached_result = self.cache.get("full_analysis", cache_key)
-    
+        
         if cached_result is not None:
             self.stats['cached_hits'] += 1
             self.state_manager.save_result(doi, cached_result, source_type)
             return cached_result
-    
-        # Use cached API fetching
+        
+        # Быстрое получение данных с обоих API параллельно
         try:
-            crossref_data, openalex_data = cached_fetch_article_data(
-                doi, self.crossref_client, self.openalex_client, self.state_manager
-            )
+            crossref_data, openalex_data = self._fetch_article_data_parallel(doi)
         except Exception as e:
             error_msg = f"Failed to fetch article data: {str(e)}"
             self._handle_processing_error(doi, error_msg, source_type, original_doi)
-            return {
-                'doi': doi,
-                'status': 'failed',
-                'error': error_msg
-            }
-    
+            return self._create_minimal_result(doi, error_msg)
+        
         crossref_error = None
         openalex_error = None
-    
+        
         if isinstance(crossref_data, dict):
             crossref_error = crossref_data.get('error')
         if isinstance(openalex_data, dict):
             openalex_error = openalex_data.get('error')
-    
+        
         if crossref_error and openalex_error:
             error_msg = f"API errors: Crossref - {crossref_error}, OpenAlex - {openalex_error}"
             self._handle_processing_error(doi, error_msg, source_type, original_doi)
-            return {
-                'doi': doi,
-                'status': 'failed',
-                'error': error_msg
-            }
-    
+            return self._create_minimal_result(doi, error_msg)
+        
         crossref_data = crossref_data if isinstance(crossref_data, dict) else {}
         openalex_data = openalex_data if isinstance(openalex_data, dict) else {}
-    
+        
+        # Быстрый сбор ссылок (только если нужно)
         references = []
-        try:
-            # Use cached references fetching
-            refs = cached_get_references(doi, self.crossref_client, self.state_manager)
-            references = refs if isinstance(refs, list) else []
-    
-            if references:
-                self.reference_relationships[doi] = references
-        except Exception as e:
-            st.warning(f"⚠️ Error fetching references for {doi}: {e}")
-            references = []
-    
+        if fetch_refs:
+            try:
+                refs = cached_get_references(doi, self.crossref_client, self.state_manager)
+                references = refs if isinstance(refs, list) else []
+                if references:
+                    self.reference_relationships[doi] = references
+            except Exception as e:
+                # Не прерываем обработку из-за ошибки в ссылках
+                references = []
+        
+        # Быстрый сбор цитирований (только если нужно)
         citations = []
-        try:
-            # Use cached citing works fetching with timeout protection
-            if source_type == "analyzed":
-                # For analyzed articles: collect ALL citations
-                cites_openalex = []
-                try:
-                    # Add timeout protection via threading
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                        future = executor.submit(
-                            cached_get_citing_works, 
-                            doi, self.openalex_client, source_type, self.state_manager
-                        )
-                        try:
-                            cites_openalex = future.result(timeout=45)  # 45 second timeout
-                            if not isinstance(cites_openalex, list):
-                                cites_openalex = []
-                        except concurrent.futures.TimeoutError:
-                            st.warning(f"⚠️ Timeout collecting citations for {doi}")
-                            cites_openalex = []
-                except Exception as e:
-                    st.warning(f"⚠️ Error in OpenAlex citation collection for {doi}: {e}")
-                    cites_openalex = []
-    
-                # Also get citations from Crossref for data completeness
-                cites_crossref = []
-                try:
-                    cites_crossref = self.crossref_client.fetch_citations(doi)
-                    if not isinstance(cites_crossref, list):
-                        cites_crossref = []
-                except Exception as e:
-                    st.warning(f"⚠️ Error in Crossref citation collection for {doi}: {e}")
-                    cites_crossref = []
-    
-                citations = list(set(cites_openalex + cites_crossref))
-    
+        if fetch_cites:
+            try:
+                if source_type == "analyzed":
+                    # Для анализируемых статей - ограниченный сбор
+                    citations = self._fetch_citations_fast(doi, source_type)
+                else:
+                    # Для вспомогательных статей - минимальный сбор
+                    citations = self._fetch_citations_minimal(doi)
+                
                 if citations:
                     self.citation_relationships[doi] = citations
-    
-            else:
-                # For reference and citing articles: use limited collection
-                cites_openalex = []
-                try:
-                    cites_openalex = cached_get_citing_works(doi, self.openalex_client, "standard", self.state_manager)
-                    if not isinstance(cites_openalex, list):
-                        cites_openalex = []
-                except Exception as e:
-                    st.warning(f"⚠️ Error in OpenAlex citation collection for {doi}: {e}")
-                    cites_openalex = []
-                    
-                cites_crossref = []
-                try:
-                    cites_crossref = self.crossref_client.fetch_citations(doi)
-                    if not isinstance(cites_crossref, list):
-                        cites_crossref = []
-                except Exception as e:
-                    st.warning(f"⚠️ Error in Crossref citation collection for {doi}: {e}")
-                    cites_crossref = []
-    
-                citations = list(set(cites_openalex + cites_crossref))
-    
-                if citations:
-                    self.citation_relationships[doi] = citations
-                    
-        except Exception as e:
-            st.warning(f"⚠️ General citation fetch error for {doi}: {e}")
-            citations = []
-    
-        # Use cached article data extraction
+            except Exception as e:
+                citations = []
+        
+        # Быстрое извлечение основных данных (без сложной обработки)
         try:
-            result = cached_extract_article_data(
-                crossref_data, openalex_data, doi, references, citations, self.data_processor
+            result = self._extract_article_basic(
+                crossref_data, openalex_data, doi, references, citations
             )
         except Exception as e:
-            error_msg = f"Failed to extract article data: {str(e)}"
+            error_msg = f"Failed to extract basic article data: {str(e)}"
             self._handle_processing_error(doi, error_msg, source_type, original_doi)
-            return {
-                'doi': doi,
-                'status': 'failed',
-                'error': error_msg
-            }
-    
-        if result.get('status') == 'success':
-            for author in result.get('authors', []):
-                author_name = author.get('name', '')
-                if author_name:
-                    self.doi_author_map[doi].append(author_name)
-                    for affiliation in author.get('affiliation', []):
-                        if affiliation:
-                            self.author_affiliation_map[author_name].add(affiliation)
-                            self.doi_affiliation_map[doi].add(affiliation)
-    
+            return self._create_minimal_result(doi, error_msg)
+        
         if result.get('status') == 'success':
             self.stats['successful'] += 1
-    
-            # Cache at all levels
+            
+            # Кэширование
             self.cache.set("full_analysis", cache_key, result, category="full_analysis")
             self.state_manager.save_result(doi, result, source_type)
-            
-            # CRITICAL FIX: Save session state immediately after each successful DOI
             self.state_manager.save_to_session()
-    
             self.cache.update_popularity(doi)
         else:
             self.stats['failed'] += 1
-    
+        
         self.stats['api_calls'] += 2
-    
+        
         return result
+    
+    def _fetch_article_data_parallel(self, doi: str) -> Tuple[Dict, Dict]:
+        """
+        Параллельное получение данных из Crossref и OpenAlex
+        """
+        crossref_data = None
+        openalex_data = None
+        
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            crossref_future = executor.submit(self.crossref_client.fetch_article, doi)
+            openalex_future = executor.submit(self.openalex_client.fetch_article, doi)
+            
+            try:
+                crossref_data = crossref_future.result(timeout=12)
+            except:
+                crossref_data = {"error": "Timeout"}
+            
+            try:
+                openalex_data = openalex_future.result(timeout=10)
+            except:
+                openalex_data = {"error": "Timeout"}
+        
+        return crossref_data, openalex_data
+    
+    def _fetch_citations_fast(self, doi: str, source_type: str) -> List[str]:
+        """
+        Быстрый сбор цитирований с ограничениями
+        """
+        citations = []
+        
+        # OpenAlex с ограничением по времени
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    cached_get_citing_works, 
+                    doi, self.openalex_client, source_type, self.state_manager
+                )
+                try:
+                    cites_openalex = future.result(timeout=25)  # Уменьшен таймаут
+                    if isinstance(cites_openalex, list):
+                        citations.extend(cites_openalex)
+                except concurrent.futures.TimeoutError:
+                    pass
+        except Exception:
+            pass
+        
+        # Crossref - быстрый запрос
+        try:
+            cites_crossref = self.crossref_client.fetch_citations(doi)
+            if isinstance(cites_crossref, list):
+                citations.extend(cites_crossref)
+        except Exception:
+            pass
+        
+        # Быстрая дедупликация
+        if citations:
+            return list(dict.fromkeys(citations))
+        return []
+    
+    def _fetch_citations_minimal(self, doi: str) -> List[str]:
+        """
+        Минимальный сбор цитирований для вспомогательных статей
+        Только одна страница из OpenAlex
+        """
+        citations = []
+        
+        # Только одна страница из OpenAlex
+        try:
+            clean_doi = self.openalex_client._clean_doi(doi)
+            if clean_doi:
+                article_data = self.openalex_client.fetch_article(clean_doi)
+                if isinstance(article_data, dict) and 'id' in article_data:
+                    article_id = article_data['id'].split('/')[-1]
+                    
+                    if article_id:
+                        url = f"https://api.openalex.org/works?filter=cites:{article_id}&per-page=100"
+                        response = self.session.get(url, timeout=8)
+                        if response.status_code == 200:
+                            data = response.json()
+                            for work in data.get('results', []):
+                                if work.get('doi'):
+                                    citing_doi = self.openalex_client._clean_doi(work['doi'])
+                                    if citing_doi:
+                                        citations.append(citing_doi)
+        except Exception:
+            pass
+        
+        return citations
+    
+    def _extract_article_basic(self, crossref_data: Dict, openalex_data: Dict,
+                              doi: str, references: List[str], citations: List[str]) -> Dict:
+        """
+        Быстрое извлечение ТОЛЬКО основных полей
+        Сложная обработка откладывается на этап экспорта
+        """
+        # Быстрое извлечение из OpenAlex
+        title = ''
+        journal = ''
+        year = ''
+        authors = []
+        citations_count = 0
+        references_count = len(references)
+        
+        if openalex_data and isinstance(openalex_data, dict):
+            title = openalex_data.get('title', '')
+            year = openalex_data.get('publication_year', '')
+            citations_count = openalex_data.get('cited_by_count', 0)
+            references_count = openalex_data.get('referenced_works_count', references_count)
+            
+            # Быстрое извлечение авторов (только базовые поля)
+            if 'authorships' in openalex_data:
+                for authorship in openalex_data['authorships']:
+                    if authorship and isinstance(authorship, dict):
+                        author_data = authorship.get('author', {})
+                        if author_data:
+                            author_name = author_data.get('display_name', '')
+                            if author_name:
+                                authors.append({
+                                    'name': author_name,
+                                    'affiliation': [],
+                                    'orcid': author_data.get('orcid', '')
+                                })
+            
+            # Быстрое извлечение журнала
+            if 'primary_location' in openalex_data:
+                source = openalex_data['primary_location'].get('source', {})
+                journal = source.get('display_name', '')
+        
+        # Дополнение из Crossref если нужно
+        if crossref_data and isinstance(crossref_data, dict):
+            message = crossref_data.get('message', crossref_data)
+            
+            if not title:
+                title_list = message.get('title', [])
+                title = title_list[0] if title_list else title
+            
+            if not journal:
+                journal_list = message.get('container-title', [])
+                journal = journal_list[0] if journal_list else journal
+            
+            if not year:
+                if 'created' in message and 'date-parts' in message['created']:
+                    date_parts = message['created'].get('date-parts', [[]])
+                    if date_parts and date_parts[0]:
+                        year = str(date_parts[0][0])
+                elif 'published' in message and 'date-parts' in message['published']:
+                    date_parts = message['published'].get('date-parts', [[]])
+                    if date_parts and date_parts[0]:
+                        year = str(date_parts[0][0])
+            
+            if citations_count == 0:
+                citations_count = message.get('is-referenced-by-count', 0)
+            
+            # Авторы из Crossref если нет из OpenAlex
+            if not authors and 'author' in message:
+                for author_obj in message.get('author', []):
+                    if author_obj:
+                        given = author_obj.get('given', '')
+                        family = author_obj.get('family', '')
+                        full_name = f"{given} {family}".strip()
+                        if full_name:
+                            authors.append({
+                                'name': full_name,
+                                'affiliation': [],
+                                'orcid': author_obj.get('ORCID', '')
+                            })
+        
+        return {
+            'doi': doi,
+            'publication_info': {
+                'title': title or 'Title not found',
+                'journal': journal or 'Journal not found',
+                'year': str(year) if year else '',
+                'citation_count_crossref': citations_count if crossref_data else 0,
+                'citation_count_openalex': citations_count if openalex_data else 0,
+                'publication_date': f"{year}-01-01" if year else '',
+                'volume': '',
+                'pages': ''
+            },
+            'topics_info': {
+                'topic': '',
+                'subfield': '',
+                'field': '',
+                'domain': '',
+                'concepts': []
+            },
+            'authors': authors,
+            'countries': [],
+            'orcid_urls': [],
+            'references': references,
+            'citations': citations,
+            'references_count': references_count,
+            'pages_formatted': '',
+            'status': 'success',
+            'quick_insights': {}
+        }
+    
+    def _create_minimal_result(self, doi: str, error_msg: str = "") -> Dict:
+        """
+        Создание минимального результата для ошибочных DOI
+        """
+        return {
+            'doi': doi,
+            'status': 'failed',
+            'error': error_msg or 'Processing failed',
+            'publication_info': {
+                'title': 'Failed to retrieve',
+                'journal': 'Unknown',
+                'year': '',
+                'citation_count_crossref': 0,
+                'citation_count_openalex': 0
+            },
+            'authors': [],
+            'references': [],
+            'citations': []
+        }
 
     def _handle_processing_error(self, doi: str, error: str, source_type: str, original_doi: str):
 
@@ -6074,9 +6235,1271 @@ class ExcelExporter:
         }
         
         return row
-    
+
 # ============================================================================
-# 🚀 MAIN SYSTEM CLASS (UPDATED FOR STREAMLIT WITH RESUME)
+# 📄 HTML REPORT GENERATOR (NEW)
+# ============================================================================
+
+def get_color_scale_html(value: float, max_val: float, min_val: float = 0, decimals: int = 1) -> str:
+    """Generate HTML for color scale value with green-yellow-red gradient"""
+    if max_val == min_val:
+        return f'<span class="color-scale-value" style="background: rgba(200,200,200,0.15); color: #1a1a1a;">{value:.{decimals}f}</span>'
+    
+    normalized = (value - min_val) / (max_val - min_val)
+    normalized = max(0, min(1, normalized))
+    
+    if normalized < 0.5:
+        ratio = normalized / 0.5
+        r = 200
+        g = int(200 * ratio)
+        b = 50
+    else:
+        ratio = (normalized - 0.5) / 0.5
+        r = int(200 * (1 - ratio))
+        g = 200
+        b = 50
+    
+    bg_color = f"rgba({r}, {g}, {b}, 0.35)"
+    formatted_value = f"{value:.{decimals}f}"
+    
+    return f'<span class="color-scale-value" style="background: {bg_color}; color: #1a1a1a;">{formatted_value}</span>'
+
+def get_heatmap_cell_color(value: float, max_val: float) -> str:
+    """Get color for heatmap cell"""
+    if value is None or value == 0 or max_val == 0:
+        return "transparent"
+    
+    normalized = value / max_val
+    normalized = max(0, min(1, normalized))
+    
+    if normalized < 0.5:
+        ratio = normalized / 0.5
+        r = 200
+        g = int(200 * ratio)
+        b = 50
+    else:
+        ratio = (normalized - 0.5) / 0.5
+        r = int(200 * (1 - ratio))
+        g = 200
+        b = 50
+    
+    return f"rgba({r}, {g}, {b}, 0.45)"
+
+def generate_html_report(analyzed_results: Dict[str, Dict],
+                         ref_results: Dict[str, Dict],
+                         citing_results: Dict[str, Dict],
+                         failed_tracker: FailedDOITracker,
+                         primary_color: str = "#667eea",
+                         secondary_color: str = "#f39c12") -> str:
+    """
+    Generate interactive HTML report from analysis results
+    """
+    
+    # Calculate basic statistics
+    analyzed_success = [r for r in analyzed_results.values() if isinstance(r, dict) and r.get('status') == 'success']
+    ref_success = [r for r in ref_results.values() if isinstance(r, dict) and r.get('status') == 'success']
+    citing_success = [r for r in citing_results.values() if isinstance(r, dict) and r.get('status') == 'success']
+    
+    total_analyzed = len(analyzed_success)
+    total_ref = len(ref_success)
+    total_citing = len(citing_success)
+    total_articles = total_analyzed + total_ref + total_citing
+    
+    # Collect all publications for the table
+    all_publications = []
+    
+    # Analyzed publications
+    for doi, result in analyzed_results.items():
+        if result.get('status') == 'success':
+            pub_info = result.get('publication_info', {})
+            authors = result.get('authors', [])
+            topics_info = result.get('topics_info', {})
+            all_publications.append({
+                'doi': doi,
+                'title': pub_info.get('title', 'No title'),
+                'year': pub_info.get('year', ''),
+                'journal': pub_info.get('journal', 'Unknown'),
+                'authors': [a.get('name', '') for a in authors if isinstance(a, dict)],
+                'affiliations': list(set([a for author in authors if isinstance(author, dict) for a in author.get('affiliation', []) if a])),
+                'citations': pub_info.get('citation_count_crossref', 0),
+                'citations_oa': pub_info.get('citation_count_openalex', 0),
+                'type': 'Analyzed',
+                'topic': topics_info.get('topic', ''),
+                'subfield': topics_info.get('subfield', ''),
+                'field': topics_info.get('field', ''),
+                'domain': topics_info.get('domain', ''),
+                'concepts': topics_info.get('concepts', [])
+            })
+    
+    # Reference publications
+    for doi, result in ref_results.items():
+        if result.get('status') == 'success':
+            pub_info = result.get('publication_info', {})
+            authors = result.get('authors', [])
+            all_publications.append({
+                'doi': doi,
+                'title': pub_info.get('title', 'No title'),
+                'year': pub_info.get('year', ''),
+                'journal': pub_info.get('journal', 'Unknown'),
+                'authors': [a.get('name', '') for a in authors if isinstance(a, dict)],
+                'affiliations': list(set([a for author in authors if isinstance(author, dict) for a in author.get('affiliation', []) if a])),
+                'citations': pub_info.get('citation_count_crossref', 0),
+                'citations_oa': pub_info.get('citation_count_openalex', 0),
+                'type': 'Reference',
+                'topic': '',
+                'subfield': '',
+                'field': '',
+                'domain': '',
+                'concepts': []
+            })
+    
+    # Citing publications
+    for doi, result in citing_results.items():
+        if result.get('status') == 'success':
+            pub_info = result.get('publication_info', {})
+            authors = result.get('authors', [])
+            all_publications.append({
+                'doi': doi,
+                'title': pub_info.get('title', 'No title'),
+                'year': pub_info.get('year', ''),
+                'journal': pub_info.get('journal', 'Unknown'),
+                'authors': [a.get('name', '') for a in authors if isinstance(a, dict)],
+                'affiliations': list(set([a for author in authors if isinstance(author, dict) for a in author.get('affiliation', []) if a])),
+                'citations': pub_info.get('citation_count_crossref', 0),
+                'citations_oa': pub_info.get('citation_count_openalex', 0),
+                'type': 'Citing',
+                'topic': '',
+                'subfield': '',
+                'field': '',
+                'domain': '',
+                'concepts': []
+            })
+    
+    # Sort publications by year (newest first)
+    all_publications.sort(key=lambda x: x.get('year', ''), reverse=True)
+    
+    # Collect all authors for author analysis
+    author_counter = Counter()
+    for pub in all_publications:
+        for author in pub.get('authors', []):
+            if author:
+                author_counter[author] += 1
+    
+    top_authors = author_counter.most_common(20)
+    max_author_count = top_authors[0][1] if top_authors else 1
+    
+    # Collect journals
+    journal_counter = Counter()
+    for pub in all_publications:
+        journal = pub.get('journal', 'Unknown')
+        if journal:
+            journal_counter[journal] += 1
+    
+    top_journals = journal_counter.most_common(15)
+    max_journal_count = top_journals[0][1] if top_journals else 1
+    
+    # Collect topics
+    topic_counter = Counter()
+    for pub in all_publications:
+        topic = pub.get('topic', '')
+        if topic:
+            topic_counter[topic] += 1
+    
+    top_topics = topic_counter.most_common(15)
+    max_topic_count = top_topics[0][1] if top_topics else 1
+    
+    # Collect concepts
+    concept_counter = Counter()
+    for pub in all_publications:
+        for concept in pub.get('concepts', []):
+            if concept:
+                concept_counter[concept] += 1
+    
+    top_concepts = concept_counter.most_common(15)
+    max_concept_count = top_concepts[0][1] if top_concepts else 1
+    
+    # Collect countries from affiliations
+    country_counter = Counter()
+    for pub in all_publications:
+        for aff in pub.get('affiliations', []):
+            # Simple country extraction - look for country names
+            for country in Config.COUNTRY_CODES.keys():
+                if country.lower() in aff.lower():
+                    country_counter[country] += 1
+                    break
+    
+    top_countries = country_counter.most_common(10)
+    max_country_count = top_countries[0][1] if top_countries else 1
+    
+    # Citation stats
+    all_citations = [p.get('citations', 0) for p in all_publications]
+    total_citations = sum(all_citations)
+    avg_citations = total_citations / len(all_publications) if all_publications else 0
+    max_citations = max(all_citations) if all_citations else 0
+    
+    # Calculate h-index
+    citations_sorted = sorted([c for c in all_citations if c > 0], reverse=True)
+    h_index = 0
+    for i, c in enumerate(citations_sorted, 1):
+        if c >= i:
+            h_index = i
+        else:
+            break
+    
+    # Years distribution
+    years = [p.get('year', '') for p in all_publications if p.get('year')]
+    year_counts = Counter(years)
+    unique_years = len(year_counts)
+    min_year = min(years) if years else None
+    max_year = max(years) if years else None
+    
+    # Find max values for color scales
+    max_citations_for_scale = max(all_citations) if all_citations else 1
+    
+    # Build HTML
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Scientific Article Analysis Report</title>
+        <style>
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            body {{
+                font-family: 'Times New Roman', 'DejaVu Serif', serif;
+                margin: 0;
+                padding: 20px;
+                background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+                color: #333;
+            }}
+            .report-wrapper {{
+                max-width: 1600px;
+                margin: 0 auto;
+                background: white;
+                box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+                border-radius: 10px;
+                overflow: hidden;
+            }}
+            
+            /* ===== SIDEBAR NAVIGATION ===== */
+            .sidebar {{
+                position: fixed;
+                left: 0;
+                top: 0;
+                width: 280px;
+                height: 100vh;
+                background: linear-gradient(135deg, {primary_color} 0%, {secondary_color} 100%);
+                color: white;
+                padding: 25px 18px;
+                overflow-y: auto;
+                z-index: 1000;
+                box-shadow: 2px 0 20px rgba(0,0,0,0.15);
+            }}
+            .sidebar::-webkit-scrollbar {{ width: 4px; }}
+            .sidebar::-webkit-scrollbar-thumb {{ background: rgba(255,255,255,0.3); border-radius: 4px; }}
+            
+            .sidebar h3 {{
+                margin-bottom: 20px;
+                font-size: 18px;
+                font-weight: 700;
+                color: white;
+                border-bottom: 2px solid rgba(255,255,255,0.3);
+                padding-bottom: 15px;
+                letter-spacing: 0.5px;
+                word-wrap: break-word;
+            }}
+            .sidebar .nav-section {{
+                margin-top: 5px;
+            }}
+            .sidebar a {{
+                color: white;
+                text-decoration: none;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                padding: 8px 14px;
+                margin: 2px 0;
+                border-radius: 8px;
+                transition: all 0.3s;
+                font-size: 13px;
+            }}
+            .sidebar a:hover {{
+                background: rgba(255,255,255,0.2);
+                transform: translateX(5px);
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }}
+            .sidebar a .nav-icon {{
+                font-size: 16px;
+                width: 24px;
+                text-align: center;
+            }}
+            
+            /* ===== MAIN CONTENT ===== */
+            .main-content {{
+                margin-left: 280px;
+                padding: 30px 40px;
+            }}
+            
+            /* ===== HEADER ===== */
+            .header {{
+                background: linear-gradient(135deg, {primary_color} 0%, {secondary_color} 100%);
+                color: white;
+                padding: 30px 40px;
+                border-radius: 15px;
+                margin-bottom: 30px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            }}
+            .header-left {{
+                display: flex;
+                align-items: center;
+                gap: 20px;
+            }}
+            .header h1 {{
+                color: white;
+                border-bottom: none;
+                margin: 0;
+                font-size: 28px;
+                font-weight: 700;
+                text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+                word-wrap: break-word;
+            }}
+            .header .subtitle {{
+                opacity: 0.9;
+                margin-top: 5px;
+                font-size: 14px;
+                text-shadow: 0 1px 2px rgba(0,0,0,0.15);
+            }}
+            
+            /* ===== SECTIONS ===== */
+            .section {{
+                background: white;
+                border-radius: 15px;
+                padding: 25px 30px;
+                margin-bottom: 25px;
+                box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+                border: 1px solid #f0f0f0;
+                transition: all 0.3s;
+            }}
+            .section:hover {{
+                box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+            }}
+            
+            .section-header {{
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                user-select: none;
+                padding: 5px 0;
+            }}
+            .section-header:hover .section-title {{
+                color: {primary_color};
+            }}
+            .section-title {{
+                font-size: 22px;
+                font-weight: 700;
+                margin-bottom: 0;
+                padding-bottom: 0;
+                border-bottom: none;
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                color: #2C3E50;
+                transition: color 0.3s;
+            }}
+            .section-title .icon {{
+                font-size: 24px;
+            }}
+            .section-title .section-badge {{
+                background: linear-gradient(135deg, {primary_color}, {secondary_color});
+                color: white;
+                padding: 2px 12px;
+                border-radius: 20px;
+                font-size: 13px;
+                font-weight: 600;
+                margin-left: 8px;
+            }}
+            .section-divider {{
+                height: 3px;
+                background: linear-gradient(90deg, {primary_color}, {secondary_color}, transparent);
+                margin: 15px 0 20px 0;
+                border-radius: 3px;
+            }}
+            .toggle-indicator {{
+                font-size: 18px;
+                transition: transform 0.3s;
+                color: {primary_color};
+                font-weight: 300;
+            }}
+            .toggle-indicator.collapsed {{
+                transform: rotate(-90deg);
+            }}
+            .section-content {{
+                display: block;
+                transition: all 0.4s ease;
+            }}
+            .section-content.collapsed {{
+                display: none;
+            }}
+            
+            /* ===== METRICS GRID ===== */
+            .metrics-grid {{
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+                gap: 12px;
+                margin: 15px 0;
+            }}
+            .metrics-grid-4 {{
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            }}
+            .metric-card {{
+                background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+                padding: 14px 18px;
+                border-radius: 12px;
+                border-left: 4px solid {primary_color};
+                text-align: center;
+                transition: all 0.3s;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+                position: relative;
+                overflow: hidden;
+            }}
+            .metric-card::after {{
+                content: '';
+                position: absolute;
+                top: 0;
+                right: 0;
+                width: 60px;
+                height: 60px;
+                background: linear-gradient(135deg, transparent 50%, {primary_color}08 100%);
+                border-radius: 0 12px 0 60px;
+            }}
+            .metric-card:hover {{
+                transform: translateY(-4px);
+                box-shadow: 0 6px 20px rgba(0,0,0,0.1);
+                border-left-color: {secondary_color};
+            }}
+            .metric-card .metric-icon {{
+                font-size: 20px;
+                display: block;
+                margin-bottom: 4px;
+            }}
+            .metric-value {{
+                font-size: 26px;
+                font-weight: 700;
+                color: #2C3E50;
+                font-family: 'Times New Roman', serif;
+                background: linear-gradient(135deg, {primary_color}, {secondary_color});
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
+            }}
+            .metric-label {{
+                font-size: 11px;
+                color: #7F8C8D;
+                margin-top: 4px;
+                font-family: 'Times New Roman', serif;
+                font-weight: 500;
+                text-transform: uppercase;
+                letter-spacing: 0.3px;
+            }}
+            
+            /* ===== PROGRESS BARS ===== */
+            .progress-bar-container {{
+                width: 100%;
+                background-color: #f0f0f0;
+                border-radius: 8px;
+                overflow: hidden;
+                margin: 4px 0;
+                height: 22px;
+                position: relative;
+                box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
+            }}
+            .progress-bar-fill {{
+                height: 100%;
+                border-radius: 8px;
+                transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: white;
+                font-size: 11px;
+                font-weight: 700;
+                text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+                position: relative;
+                overflow: hidden;
+                min-width: 30px;
+            }}
+            .progress-bar-fill.animate {{
+                animation: shimmer 2s infinite linear;
+                background-size: 200% 100%;
+            }}
+            @keyframes shimmer {{
+                0% {{ background-position: -200% 0; }}
+                100% {{ background-position: 200% 0; }}
+            }}
+            
+            .progress-bar-label {{
+                display: flex;
+                justify-content: space-between;
+                font-size: 12px;
+                margin: 2px 0 1px 0;
+                color: #555;
+                font-weight: 500;
+            }}
+            .progress-bar-label .label-value {{
+                font-weight: 700;
+                color: #2C3E50;
+            }}
+            
+            /* ===== TABLES ===== */
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin: 12px 0;
+                font-family: 'Times New Roman', serif;
+                font-size: 13px;
+            }}
+            th {{
+                background: linear-gradient(135deg, {primary_color} 0%, {secondary_color} 100%);
+                color: white;
+                padding: 10px 14px;
+                text-align: left;
+                font-weight: 600;
+                position: sticky;
+                top: 0;
+                z-index: 10;
+                white-space: nowrap;
+            }}
+            th.sortable {{
+                cursor: pointer;
+                user-select: none;
+                position: relative;
+            }}
+            th.sortable:hover {{
+                opacity: 0.9;
+            }}
+            th.sortable::after {{
+                content: ' ↕';
+                opacity: 0.5;
+                font-size: 10px;
+            }}
+            th.sortable.asc::after {{
+                content: ' ↑';
+                opacity: 0.8;
+            }}
+            th.sortable.desc::after {{
+                content: ' ↓';
+                opacity: 0.8;
+            }}
+            td {{
+                padding: 8px 14px;
+                border-bottom: 1px solid #e9ecef;
+                vertical-align: middle;
+                transition: background 0.2s;
+            }}
+            tr:hover td {{
+                background-color: #f8f9fa;
+            }}
+            .scrollable-table {{
+                max-height: 500px;
+                overflow-y: auto;
+                border-radius: 8px;
+                border: 1px solid #e9ecef;
+            }}
+            .scrollable-table thead {{
+                position: sticky;
+                top: 0;
+                z-index: 10;
+            }}
+            
+            /* ===== COLOR SCALE ===== */
+            .color-scale-value {{
+                display: inline-block;
+                padding: 2px 10px;
+                border-radius: 8px;
+                font-weight: 600;
+                text-align: center;
+                min-width: 30px;
+                transition: all 0.2s;
+            }}
+            .color-scale-value:hover {{
+                transform: scale(1.05);
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            }}
+            
+            /* ===== BADGES ===== */
+            .badge {{
+                display: inline-block;
+                padding: 2px 10px;
+                border-radius: 12px;
+                font-size: 11px;
+                font-weight: 600;
+                margin: 1px 2px;
+            }}
+            .badge-info {{ background: #3498DB; color: white; }}
+            .badge-success {{ background: #2ECC71; color: white; }}
+            .badge-warning {{ background: #F39C12; color: white; }}
+            .badge-danger {{ background: #E74C3C; color: white; }}
+            .badge-primary {{ background: {primary_color}; color: white; }}
+            
+            /* ===== DOI LINK ===== */
+            .doi-link {{
+                color: #2980B9;
+                text-decoration: none;
+                font-size: 11px;
+                word-break: break-all;
+                transition: color 0.2s;
+            }}
+            .doi-link:hover {{
+                color: {primary_color};
+                text-decoration: underline;
+            }}
+            
+            /* ===== FILTER SECTION ===== */
+            .filter-section {{
+                background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+                padding: 15px 20px;
+                border-radius: 10px;
+                margin-bottom: 15px;
+                border: 1px solid #e9ecef;
+            }}
+            .filter-row {{
+                display: flex;
+                flex-wrap: wrap;
+                gap: 12px;
+                align-items: center;
+            }}
+            .filter-row .filter-group {{
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                background: white;
+                padding: 4px 10px 4px 12px;
+                border-radius: 8px;
+                border: 1px solid #e9ecef;
+            }}
+            .filter-row label {{
+                font-size: 11px;
+                font-weight: 600;
+                color: #555;
+                white-space: nowrap;
+                text-transform: uppercase;
+                letter-spacing: 0.3px;
+            }}
+            .filter-row select, .filter-row input {{
+                padding: 4px 8px;
+                border: none;
+                border-radius: 4px;
+                font-size: 12px;
+                font-family: 'Times New Roman', serif;
+                background: transparent;
+                outline: none;
+            }}
+            .filter-row select:focus, .filter-row input:focus {{
+                box-shadow: 0 0 0 2px {primary_color}40;
+            }}
+            .filter-row input[type="text"] {{
+                width: 130px;
+            }}
+            .filter-row input[type="number"] {{
+                width: 70px;
+            }}
+            .filter-stats {{
+                margin-top: 10px;
+                font-size: 13px;
+                color: #555;
+                padding: 6px 12px;
+                background: white;
+                border-radius: 8px;
+                border: 1px solid #e9ecef;
+                display: inline-block;
+            }}
+            .filter-stats strong {{
+                color: #2C3E50;
+            }}
+            
+            /* ===== WORD WRAP ===== */
+            .word-wrap {{
+                word-wrap: break-word;
+                max-width: 300px;
+            }}
+            
+            /* ===== FOOTER ===== */
+            .footer {{
+                margin-top: 40px;
+                padding-top: 20px;
+                border-top: 2px solid #e9ecef;
+                text-align: center;
+                color: #7F8C8D;
+                font-size: 12px;
+            }}
+            .footer a {{
+                color: {primary_color};
+                text-decoration: none;
+            }}
+            .footer a:hover {{
+                text-decoration: underline;
+            }}
+            
+            /* ===== ANIMATIONS ===== */
+            @keyframes fadeInUp {{
+                from {{ opacity: 0; transform: translateY(20px); }}
+                to {{ opacity: 1; transform: translateY(0); }}
+            }}
+            .section {{
+                animation: fadeInUp 0.6s ease forwards;
+            }}
+            .section:nth-child(2) {{ animation-delay: 0.1s; }}
+            .section:nth-child(3) {{ animation-delay: 0.2s; }}
+            .section:nth-child(4) {{ animation-delay: 0.3s; }}
+            .section:nth-child(5) {{ animation-delay: 0.4s; }}
+            .section:nth-child(6) {{ animation-delay: 0.5s; }}
+            .section:nth-child(7) {{ animation-delay: 0.6s; }}
+            
+            /* ===== RESPONSIVE ===== */
+            @media print {{
+                .sidebar {{ display: none; }}
+                .main-content {{ margin-left: 0; }}
+                .section {{ box-shadow: none; border: 1px solid #ddd; }}
+                .metric-card {{ box-shadow: none; }}
+            }}
+            @media (max-width: 768px) {{
+                .sidebar {{ display: none; }}
+                .main-content {{ margin-left: 0; padding: 15px; }}
+                .header {{ flex-direction: column; text-align: center; padding: 20px; }}
+                .header-left {{ flex-direction: column; }}
+                .filter-row {{ flex-direction: column; align-items: stretch; }}
+                .filter-row .filter-group {{ flex-wrap: wrap; }}
+                .metrics-grid {{ grid-template-columns: repeat(2, 1fr); }}
+                .metrics-grid-4 {{ grid-template-columns: 1fr 1fr; }}
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="sidebar">
+            <h3>📚 Article Report</h3>
+            <div class="nav-section">
+                <a href="#overview"><span class="nav-icon">📋</span> Overview</a>
+                <a href="#publications"><span class="nav-icon">📄</span> Publications</a>
+                <a href="#authors"><span class="nav-icon">👤</span> Authors</a>
+                <a href="#journals"><span class="nav-icon">📰</span> Journals</a>
+                <a href="#topics"><span class="nav-icon">🏷️</span> Topics &amp; Concepts</a>
+                <a href="#countries"><span class="nav-icon">🌍</span> Countries</a>
+            </div>
+            <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.2); font-size: 11px; opacity: 0.8; line-height: 1.6;">
+                <div>Total: {total_articles} articles</div>
+                <div style="margin-top: 4px; font-size: 10px; opacity: 0.6;">Generated: {datetime.now().strftime('%d.%m.%Y %H:%M')}</div>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <!-- HEADER -->
+            <div class="header">
+                <div class="header-left">
+                    <div>
+                        <h1>📚 Scientific Article Analysis Report</h1>
+                        <div class="subtitle">
+                            {total_articles} articles analyzed • {total_citations} total citations • h-index: {h_index}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- ============================================================ -->
+            <!-- SECTION 1: OVERVIEW -->
+            <!-- ============================================================ -->
+            <div id="overview" class="section">
+                <div class="section-header" onclick="toggleSection('overview_content')">
+                    <div class="section-title">
+                        <span class="icon">📋</span> Overview
+                        <span class="section-badge">{total_articles} articles</span>
+                    </div>
+                    <span class="toggle-indicator" id="overview_indicator">▼</span>
+                </div>
+                <div class="section-divider"></div>
+                <div id="overview_content" class="section-content">
+                    <!-- Metrics Grid -->
+                    <div class="metrics-grid">
+                        <div class="metric-card">
+                            <div class="metric-value">{total_analyzed}</div>
+                            <div class="metric-label">Analyzed</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{total_ref}</div>
+                            <div class="metric-label">References</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{total_citing}</div>
+                            <div class="metric-label">Citing Works</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{total_articles}</div>
+                            <div class="metric-label">Total Articles</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{total_citations:,}</div>
+                            <div class="metric-label">Total Citations</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{avg_citations:.1f}</div>
+                            <div class="metric-label">Avg Citations</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{max_citations}</div>
+                            <div class="metric-label">Max Citations</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{h_index}</div>
+                            <div class="metric-label">h-index</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{unique_years}</div>
+                            <div class="metric-label">Years Span</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{min_year or 'N/A'}</div>
+                            <div class="metric-label">First Year</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{max_year or 'N/A'}</div>
+                            <div class="metric-label">Last Year</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{len(author_counter)}</div>
+                            <div class="metric-label">Unique Authors</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{len(journal_counter)}</div>
+                            <div class="metric-label">Unique Journals</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{len(topic_counter)}</div>
+                            <div class="metric-label">Unique Topics</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{len(concept_counter)}</div>
+                            <div class="metric-label">Unique Concepts</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{len(country_counter)}</div>
+                            <div class="metric-label">Unique Countries</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{len([p for p in all_publications if p.get('type') == 'Analyzed'])}</div>
+                            <div class="metric-label">Analyzed Articles</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{len([p for p in all_publications if p.get('type') == 'Reference'])}</div>
+                            <div class="metric-label">Reference Articles</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{len([p for p in all_publications if p.get('type') == 'Citing'])}</div>
+                            <div class="metric-label">Citing Articles</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{len([r for r in failed_tracker.failed_dois.values() if r.get('source_type') == 'analyzed'])}</div>
+                            <div class="metric-label">Failed Analyzed</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{len([r for r in failed_tracker.failed_dois.values() if r.get('source_type') == 'ref'])}</div>
+                            <div class="metric-label">Failed References</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{len([r for r in failed_tracker.failed_dois.values() if r.get('source_type') == 'citing'])}</div>
+                            <div class="metric-label">Failed Citing</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">{failed_tracker.stats['total_failed']}</div>
+                            <div class="metric-label">Total Failed</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- ============================================================ -->
+            <!-- SECTION 2: PUBLICATIONS -->
+            <!-- ============================================================ -->
+            <div id="publications" class="section">
+                <div class="section-header" onclick="toggleSection('publications_content')">
+                    <div class="section-title">
+                        <span class="icon">📄</span> Publications
+                        <span class="section-badge">{len(all_publications)} articles</span>
+                    </div>
+                    <span class="toggle-indicator" id="publications_indicator">▼</span>
+                </div>
+                <div class="section-divider"></div>
+                <div id="publications_content" class="section-content">
+                    
+                    <div class="filter-section">
+                        <div class="filter-row">
+                            <div class="filter-group">
+                                <label>🔍</label>
+                                <input type="text" id="titleFilter" placeholder="Search title..." onkeyup="filterPublications()">
+                            </div>
+                            <div class="filter-group">
+                                <label>📅</label>
+                                <select id="yearFilter" onchange="filterPublications()">
+                                    <option value="">All Years</option>
+                                    {''.join([
+                                        f'<option value="{year}">{year}</option>'
+                                        for year in sorted(set([p.get('year', '') for p in all_publications if p.get('year')]), reverse=True)
+                                    ])}
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label>👤</label>
+                                <input type="text" id="authorFilter" placeholder="Author..." onkeyup="filterPublications()">
+                            </div>
+                            <div class="filter-group">
+                                <label>📊</label>
+                                <input type="number" id="citationFilter" placeholder="Min citations..." min="0" onchange="filterPublications()">
+                            </div>
+                            <div class="filter-group">
+                                <label>🏷️</label>
+                                <select id="typeFilter" onchange="filterPublications()">
+                                    <option value="">All Types</option>
+                                    <option value="Analyzed">Analyzed</option>
+                                    <option value="Reference">Reference</option>
+                                    <option value="Citing">Citing</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="filter-stats">
+                            <span id="visibleCount">Showing {len(all_publications)} of {len(all_publications)} publications</span>
+                        </div>
+                    </div>
+                    
+                    <div class="scrollable-table" style="max-height: 600px;">
+                        <table id="publicationsTable">
+                            <thead>
+                                <tr>
+                                    <th class="sortable" onclick="sortTable('publicationsTable', 0)">#</th>
+                                    <th class="sortable" onclick="sortTable('publicationsTable', 1)">Title</th>
+                                    <th class="sortable" onclick="sortTable('publicationsTable', 2)">Year</th>
+                                    <th class="sortable" onclick="sortTable('publicationsTable', 3)">Journal</th>
+                                    <th class="sortable" onclick="sortTable('publicationsTable', 4)">Authors</th>
+                                    <th class="sortable" onclick="sortTable('publicationsTable', 5)">Citations</th>
+                                    <th class="sortable" onclick="sortTable('publicationsTable', 6)">Type</th>
+                                    <th>DOI</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {''.join([
+                                    f'''
+                                    <tr 
+                                        data-year="{p.get('year', '')}" 
+                                        data-authors="{','.join([html_module.escape(a) for a in p.get('authors', [])])}" 
+                                        data-citations="{p.get('citations', 0)}" 
+                                        data-title="{html_module.escape((p.get('title') or '').lower())}"
+                                        data-type="{p.get('type', '')}"
+                                        data-doi="{html_module.escape((p.get('doi') or '').lower())}"
+                                    >
+                                        <td>{i+1}</td>
+                                        <td class="word-wrap">{html_module.escape((p.get('title') or 'No title')[:120])}{'...' if len(p.get('title') or '') > 120 else ''}</td>
+                                        <td>{p.get('year', 'N/A')}</td>
+                                        <td>{html_module.escape(p.get('journal', 'Unknown')[:40])}</td>
+                                        <td>{', '.join([html_module.escape(a) for a in p.get('authors', [])[:3]])}{' +' + str(len(p.get('authors', []))-3) if len(p.get('authors', [])) > 3 else ''}</td>
+                                        <td>{get_color_scale_html(p.get('citations', 0), max_citations_for_scale)}</td>
+                                        <td><span class="badge badge-{'info' if p.get('type') == 'Analyzed' else 'success' if p.get('type') == 'Reference' else 'warning'}">{p.get('type', 'Unknown')}</span></td>
+                                        <td><a href="https://doi.org/{html_module.escape(p.get('doi') or '')}" target="_blank" class="doi-link">{html_module.escape((p.get('doi') or '')[:20])}...</a></td>
+                                    </tr>
+                                    '''
+                                    for i, p in enumerate(all_publications)
+                                ])}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- ============================================================ -->
+            <!-- SECTION 3: AUTHORS -->
+            <!-- ============================================================ -->
+            <div id="authors" class="section">
+                <div class="section-header" onclick="toggleSection('authors_content')">
+                    <div class="section-title">
+                        <span class="icon">👤</span> Top Authors
+                        <span class="section-badge">{len(author_counter)} unique</span>
+                    </div>
+                    <span class="toggle-indicator" id="authors_indicator">▼</span>
+                </div>
+                <div class="section-divider"></div>
+                <div id="authors_content" class="section-content">
+                    
+                    {''.join([
+                        f'''
+                        <div style="margin: 4px 0;">
+                            <div class="progress-bar-label">
+                                <span>{i+1}. {html_module.escape(author)}</span>
+                                <span class="label-value">{count} publications</span>
+                            </div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar-fill animate" style="width: {count/max_author_count*100:.1f}%; background: linear-gradient(90deg, {primary_color}, {secondary_color});">
+                                    {count}
+                                </div>
+                            </div>
+                        </div>
+                        '''
+                        for i, (author, count) in enumerate(top_authors)
+                    ])}
+                    
+                </div>
+            </div>
+            
+            <!-- ============================================================ -->
+            <!-- SECTION 4: JOURNALS -->
+            <!-- ============================================================ -->
+            <div id="journals" class="section">
+                <div class="section-header" onclick="toggleSection('journals_content')">
+                    <div class="section-title">
+                        <span class="icon">📰</span> Top Journals
+                        <span class="section-badge">{len(journal_counter)} unique</span>
+                    </div>
+                    <span class="toggle-indicator" id="journals_indicator">▼</span>
+                </div>
+                <div class="section-divider"></div>
+                <div id="journals_content" class="section-content">
+                    
+                    {''.join([
+                        f'''
+                        <div style="margin: 4px 0;">
+                            <div class="progress-bar-label">
+                                <span>{i+1}. {html_module.escape(journal)}</span>
+                                <span class="label-value">{count} articles</span>
+                            </div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar-fill animate" style="width: {count/max_journal_count*100:.1f}%; background: linear-gradient(90deg, {primary_color}, {secondary_color});">
+                                    {count}
+                                </div>
+                            </div>
+                        </div>
+                        '''
+                        for i, (journal, count) in enumerate(top_journals)
+                    ])}
+                    
+                </div>
+            </div>
+            
+            <!-- ============================================================ -->
+            <!-- SECTION 5: TOPICS & CONCEPTS -->
+            <!-- ============================================================ -->
+            <div id="topics" class="section">
+                <div class="section-header" onclick="toggleSection('topics_content')">
+                    <div class="section-title">
+                        <span class="icon">🏷️</span> Topics &amp; Concepts
+                        <span class="section-badge">{len(topic_counter)} topics, {len(concept_counter)} concepts</span>
+                    </div>
+                    <span class="toggle-indicator" id="topics_indicator">▼</span>
+                </div>
+                <div class="section-divider"></div>
+                <div id="topics_content" class="section-content">
+                    
+                    <h3 style="color: {primary_color}; font-size: 16px; margin-bottom: 10px;">Topics</h3>
+                    {''.join([
+                        f'''
+                        <div style="margin: 4px 0;">
+                            <div class="progress-bar-label">
+                                <span>{i+1}. {html_module.escape(topic)}</span>
+                                <span class="label-value">{count} articles</span>
+                            </div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar-fill animate" style="width: {count/max_topic_count*100:.1f}%; background: linear-gradient(90deg, {primary_color}, {secondary_color});">
+                                    {count}
+                                </div>
+                            </div>
+                        </div>
+                        '''
+                        for i, (topic, count) in enumerate(top_topics)
+                    ])}
+                    
+                    <h3 style="color: {primary_color}; font-size: 16px; margin-top: 20px; margin-bottom: 10px;">Concepts</h3>
+                    {''.join([
+                        f'''
+                        <div style="margin: 4px 0;">
+                            <div class="progress-bar-label">
+                                <span>{i+1}. {html_module.escape(concept)}</span>
+                                <span class="label-value">{count} articles</span>
+                            </div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar-fill animate" style="width: {count/max_concept_count*100:.1f}%; background: linear-gradient(90deg, {secondary_color}, {primary_color});">
+                                    {count}
+                                </div>
+                            </div>
+                        </div>
+                        '''
+                        for i, (concept, count) in enumerate(top_concepts)
+                    ])}
+                    
+                </div>
+            </div>
+            
+            <!-- ============================================================ -->
+            <!-- SECTION 6: COUNTRIES -->
+            <!-- ============================================================ -->
+            <div id="countries" class="section">
+                <div class="section-header" onclick="toggleSection('countries_content')">
+                    <div class="section-title">
+                        <span class="icon">🌍</span> Countries
+                        <span class="section-badge">{len(country_counter)} unique</span>
+                    </div>
+                    <span class="toggle-indicator" id="countries_indicator">▼</span>
+                </div>
+                <div class="section-divider"></div>
+                <div id="countries_content" class="section-content">
+                    
+                    {''.join([
+                        f'''
+                        <div style="margin: 4px 0;">
+                            <div class="progress-bar-label">
+                                <span>{i+1}. {html_module.escape(country)}</span>
+                                <span class="label-value">{count} articles</span>
+                            </div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar-fill animate" style="width: {count/max_country_count*100:.1f}%; background: linear-gradient(90deg, {primary_color}, {secondary_color});">
+                                    {count}
+                                </div>
+                            </div>
+                        </div>
+                        '''
+                        for i, (country, count) in enumerate(top_countries)
+                    ])}
+                    
+                </div>
+            </div>
+            
+            <!-- ============================================================ -->
+            <!-- FOOTER -->
+            <!-- ============================================================ -->
+            <div class="footer">
+                <p>© Scientific Article Analyzer by DOI / Generated on {datetime.now().strftime('%d.%m.%Y %H:%M')}</p>
+                <p>Multi-level caching system • Smart DOI processing • Interactive HTML report</p>
+            </div>
+            
+        </div>
+    </div>
+    
+    <script>
+        // ===== TOGGLE SECTIONS =====
+        function toggleSection(sectionId) {{
+            var content = document.getElementById(sectionId);
+            var indicator = document.getElementById(sectionId.replace('_content', '_indicator'));
+            if (content) {{
+                if (content.style.display === 'none' || content.style.display === '') {{
+                    content.style.display = 'block';
+                    if (indicator) indicator.textContent = '▼';
+                    content.style.animation = 'fadeInUp 0.4s ease forwards';
+                }} else {{
+                    content.style.display = 'none';
+                    if (indicator) indicator.textContent = '▶';
+                }}
+            }}
+        }}
+        
+        // ===== FILTER PUBLICATIONS =====
+        function filterPublications() {{
+            var titleFilter = document.getElementById('titleFilter').value.toLowerCase();
+            var yearFilter = document.getElementById('yearFilter').value;
+            var authorFilter = document.getElementById('authorFilter').value.toLowerCase();
+            var citationFilter = parseInt(document.getElementById('citationFilter').value) || 0;
+            var typeFilter = document.getElementById('typeFilter').value;
+            
+            var rows = document.querySelectorAll('#publicationsTable tbody tr');
+            var visible = 0;
+            
+            rows.forEach(function(row) {{
+                var title = row.getAttribute('data-title') || '';
+                var year = row.getAttribute('data-year') || '';
+                var authors = row.getAttribute('data-authors') || '';
+                var citations = parseInt(row.getAttribute('data-citations')) || 0;
+                var type = row.getAttribute('data-type') || '';
+                
+                var show = true;
+                
+                if (titleFilter && !title.includes(titleFilter)) show = false;
+                if (yearFilter && year !== yearFilter) show = false;
+                if (authorFilter && !authors.toLowerCase().includes(authorFilter)) show = false;
+                if (citationFilter > 0 && citations < citationFilter) show = false;
+                if (typeFilter && type !== typeFilter) show = false;
+                
+                row.style.display = show ? '' : 'none';
+                if (show) visible++;
+            }});
+            
+            document.getElementById('visibleCount').textContent = 
+                'Showing ' + visible + ' of ' + rows.length + ' publications';
+        }}
+        
+        // ===== UNIVERSAL SORT FUNCTION =====
+        function sortTable(tableId, colIndex) {{
+            var table = document.getElementById(tableId);
+            if (!table) return;
+            var tbody = table.querySelector('tbody');
+            if (!tbody) return;
+            var rows = Array.from(tbody.querySelectorAll('tr'));
+            
+            var key = tableId + '_col_' + colIndex;
+            if (!window.sortState) window.sortState = {{}};
+            if (!window.sortState[key]) window.sortState[key] = 1;
+            else window.sortState[key] *= -1;
+            var direction = window.sortState[key];
+            
+            var headers = table.querySelectorAll('thead th');
+            headers.forEach(function(th, idx) {{
+                th.classList.remove('asc', 'desc');
+                if (idx === colIndex) {{
+                    th.classList.add(direction > 0 ? 'asc' : 'desc');
+                }}
+            }});
+            
+            rows.sort(function(a, b) {{
+                var valA = a.cells[colIndex] ? a.cells[colIndex].textContent.trim() : '';
+                var valB = b.cells[colIndex] ? b.cells[colIndex].textContent.trim() : '';
+                
+                var numA = parseFloat(valA.replace(/,/g, ''));
+                var numB = parseFloat(valB.replace(/,/g, ''));
+                if (!isNaN(numA) && !isNaN(numB)) {{
+                    return (numA - numB) * direction;
+                }}
+                
+                return valA.localeCompare(valB) * direction;
+            }});
+            
+            rows.forEach(function(row) {{
+                tbody.appendChild(row);
+            }});
+        }}
+        
+        // ===== AUTO-OPEN FIRST SECTION =====
+        document.addEventListener('DOMContentLoaded', function() {{
+            var sections = ['publications_content', 'authors_content', 'journals_content', 'topics_content', 'countries_content'];
+            sections.forEach(function(id) {{
+                var el = document.getElementById(id);
+                if (el) {{
+                    el.style.display = 'none';
+                }}
+            }});
+            var indicators = ['publications_indicator', 'authors_indicator', 'journals_indicator', 'topics_indicator', 'countries_indicator'];
+            indicators.forEach(function(id) {{
+                var el = document.getElementById(id);
+                if (el) {{
+                    el.textContent = '▶';
+                }}
+            }});
+        }});
+    </script>
+    
+    </body>
+    </html>
+    """
+    
+    return html
+
+# ============================================================================
+# 🚀 MAIN SYSTEM CLASS (UPDATED FOR STREAMLIT WITH HTML REPORT)
 # ============================================================================
 
 class ArticleAnalyzerSystem:
@@ -6554,6 +7977,36 @@ class ArticleAnalyzerSystem:
             output.seek(0)
             return output
 
+    def create_html_report(self, progress_container=None, primary_color: str = "#667eea", secondary_color: str = "#f39c12") -> str:
+        """Generate HTML report from current data"""
+        if not hasattr(st.session_state, 'analyzed_results') or not st.session_state.analyzed_results:
+            if progress_container:
+                progress_container.error("❌ No analyzed results available")
+            return ""
+        
+        if progress_container:
+            progress_container.text("📄 Generating interactive HTML report...")
+        
+        try:
+            html_content = generate_html_report(
+                analyzed_results=st.session_state.analyzed_results or {},
+                ref_results=st.session_state.ref_results or {},
+                citing_results=st.session_state.citing_results or {},
+                failed_tracker=self.failed_tracker,
+                primary_color=primary_color,
+                secondary_color=secondary_color
+            )
+            
+            if progress_container:
+                progress_container.success("✅ HTML report generated successfully!")
+            
+            return html_content
+            
+        except Exception as e:
+            if progress_container:
+                progress_container.error(f"❌ HTML report generation error: {str(e)}")
+            return ""
+
     def clear_data(self):
         """Clear all data"""
         self.state_manager.clear_state()
@@ -6585,7 +8038,7 @@ class ArticleAnalyzerSystem:
         }
 
 # ============================================================================
-# 🎛️ STREAMLIT INTERFACE (UPDATED)
+# 🎛️ STREAMLIT INTERFACE (UPDATED WITH HTML REPORT)
 # ============================================================================
 
 def main():
@@ -6747,6 +8200,14 @@ def main():
                              type="primary" if not export_disabled else "secondary", 
                              use_container_width=True,
                              disabled=export_disabled)
+    
+    # ===== NEW: HTML REPORT EXPORT BUTTON =====
+    col5, col6, col7 = st.columns([2, 2, 6])
+    with col5:
+        html_export_btn = st.button("📄 HTML Report",
+                                    type="primary" if not export_disabled else "secondary",
+                                    use_container_width=True,
+                                    disabled=export_disabled)
     
     # Progress visualization (always visible)
     if system.state_manager.current_stage:
@@ -6984,6 +8445,55 @@ def main():
                     except Exception as e:
                         st.error(f"❌ Report creation error: {str(e)}")
     
+    # ===== NEW: HTML REPORT HANDLER =====
+    if html_export_btn:
+        if not hasattr(st.session_state, 'analyzed_results') or not st.session_state.analyzed_results:
+            st.warning("⚠️ No analyzed results available for HTML report")
+        else:
+            has_successful = any(r.get('status') == 'success' for r in st.session_state.analyzed_results.values())
+            if not has_successful:
+                st.warning("⚠️ No successful results available for HTML report")
+            else:
+                with st.spinner("📄 Generating interactive HTML report..."):
+                    try:
+                        # Get color settings from session state
+                        primary_color = st.session_state.get('primary_color', '#667eea')
+                        secondary_color = st.session_state.get('secondary_color', '#f39c12')
+                        
+                        # Create HTML report
+                        html_content = system.create_html_report(
+                            progress_container=None,
+                            primary_color=primary_color,
+                            secondary_color=secondary_color
+                        )
+                        
+                        if html_content:
+                            # Create filename
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            filename = f"article_analysis_report_{timestamp}.html"
+                            
+                            st.success(f"✅ HTML report generated!")
+                            
+                            # Show download button
+                            col1, col2 = st.columns([1, 3])
+                            with col1:
+                                st.download_button(
+                                    label="⬇️ Download HTML Report",
+                                    data=html_content.encode('utf-8'),
+                                    file_name=filename,
+                                    mime="text/html",
+                                    type="primary"
+                                )
+                            
+                            # Show preview
+                            with st.expander("📋 HTML Report Preview"):
+                                st.components.v1.html(html_content, height=600, scrolling=True)
+                        else:
+                            st.warning("⚠️ Failed to generate HTML report")
+                            
+                    except Exception as e:
+                        st.error(f"❌ HTML report generation error: {str(e)}")
+    
     # Show statistics if there is processed data
     if st.session_state.processing_complete:
         st.header("📈 Processing Statistics")
@@ -7107,7 +8617,7 @@ def main():
         st.caption(f"API calls saved: {total_saved}")
     
     with footer_col3:
-        st.caption(f"System version: 4.0 (Multi-level caching)")
+        st.caption(f"System version: 4.0 (Multi-level caching + HTML Report)")
     
     st.markdown("""
     You can use https://rca-title-keywords.streamlit.app/ for the Title Keywords analysis, 
