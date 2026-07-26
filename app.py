@@ -442,6 +442,9 @@ LANG = {
         'total_connections': 'Total Connections',
         'ref_analyzed_connections': 'Ref→Analyzed Connections',
         'analyzed_citing_connections': 'Analyzed→Citing Connections',
+        'analyzed_articles_list': 'Analyzed Articles List',
+        'analyzed_articles_count': 'Analyzed Articles',
+        'unique_journals': 'Unique Journals',
     }
 }
 
@@ -2825,8 +2828,11 @@ class DOIAnalyzer:
         # 1. Basic metrics for all levels
         results['basic_metrics'] = self._analyze_basic_metrics()
         
-        # 2. Author analysis (Level II only)
+        # 2.1 Author analysis (Level II only)
         results['author_analysis'] = self._analyze_authors()
+        
+        # 2.2 Analyzed articles list (Level II) =====
+        results['analyzed_articles_list'] = self._get_analyzed_articles_list()
         
         # 3. Affiliation analysis (Level II only)
         results['affiliation_analysis'] = self._analyze_affiliations()
@@ -2855,10 +2861,10 @@ class DOIAnalyzer:
         # 11. References list (Level I)
         results['references_list'] = self._get_references_list()
         
-        # ===== NEW: 12. Title Keywords Analysis =====
+        # 12. Title Keywords Analysis =====
         results['title_keywords'] = self._analyze_title_keywords()
         
-        # ===== NEW: 13. Temporal Relationships =====
+        # 13. Temporal Relationships =====
         results['temporal_relationships'] = self._analyze_temporal_relationships()
         
         self.analysis_results = results
@@ -3973,6 +3979,78 @@ class DOIAnalyzer:
             })
         return result
 
+    def _get_analyzed_articles_list(self) -> List[Dict]:
+        """Get list of analyzed articles (Level II) with full metadata"""
+        result = []
+        
+        for doi in self.level_II:
+            meta = self.metadata_II.get(doi, {})
+            
+            # Get authors with ORCID
+            authors_with_orcids = meta.get('authors_with_orcids', [])
+            authors_list = [a.get('name', '') for a in authors_with_orcids if a.get('name')]
+            authors_str = ', '.join(authors_list[:5])
+            if len(authors_list) > 5:
+                authors_str += f' +{len(authors_list)-5} more'
+            
+            # Get affiliations
+            affiliations = meta.get('affiliations', [])
+            affiliations_str = ', '.join(affiliations[:3])
+            if len(affiliations) > 3:
+                affiliations_str += f' +{len(affiliations)-3} more'
+            
+            # Get countries
+            countries = meta.get('affiliation_countries', [])
+            countries_str = ', '.join(countries[:3])
+            if len(countries) > 3:
+                countries_str += f' +{len(countries)-3} more'
+            
+            # Get citation info
+            citations = meta.get('cited_by_count', 0)
+            year = meta.get('publication_year')
+            
+            # Get journal and publisher
+            journal = meta.get('journal_name', 'Unknown')
+            publisher = meta.get('publisher', 'Unknown')
+            
+            # Get Open Access status
+            oa_status = meta.get('oa_status', 'unknown')
+            is_oa = meta.get('is_oa', False)
+            
+            # Get topics
+            topics = meta.get('topics', [])
+            topics_str = ', '.join(topics[:3])
+            if len(topics) > 3:
+                topics_str += f' +{len(topics)-3} more'
+            
+            result.append({
+                'doi': doi,
+                'title': meta.get('title', 'No title'),
+                'year': year,
+                'authors': authors_str,
+                'authors_full': authors_list,
+                'authors_with_orcids': authors_with_orcids,
+                'affiliations': affiliations_str,
+                'affiliations_full': affiliations,
+                'countries': countries_str,
+                'countries_full': countries,
+                'citations': citations,
+                'journal': journal,
+                'publisher': publisher,
+                'oa_status': oa_status,
+                'is_oa': is_oa,
+                'topics': topics_str,
+                'topics_full': topics,
+                'publication_date': meta.get('publication_date'),
+                'type': meta.get('type', 'unknown'),
+                'raw_type': meta.get('raw_type', '')
+            })
+        
+        # Sort by year (newest first), then by citations
+        result.sort(key=lambda x: (x.get('year') or 0, x.get('citations', 0)), reverse=True)
+        
+        return result
+
     # ============================================
     # ============================================
     # NEW: TITLE KEYWORDS ANALYSIS
@@ -4331,6 +4409,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
     author_distribution = results.get('author_distribution', {})
     multilevel = results.get('multilevel_relationships', {})
     references_list = results.get('references_list', [])
+    analyzed_articles_list = results.get('analyzed_articles_list', [])
     
     # ===== NEW: Get Title Keywords and Temporal Relationships =====
     title_keywords = results.get('title_keywords', {})
@@ -5535,7 +5614,80 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                         </table>
                     </div>
                     
-                    <!-- Geographic Analysis -->
+                    <!-- ===== NEW: Analyzed Articles List ===== -->
+                    <h3 style="color: {primary}; font-size: 16px; margin-top: 20px;">📄 {t('analyzed_articles_list')}</h3>
+                    <p style="color: #666; font-size: 13px; margin-bottom: 10px;">
+                        List of {len(analyzed_articles_list)} analyzed articles (Level II) with full metadata.
+                    </p>
+                    
+                    <div class="scrollable-table" style="max-height: 600px;">
+                        <table id="analyzed_articles_table">
+                            <thead>
+                                <tr>
+                                    <th class="sortable" onclick="sortTable('analyzed_articles_table', 0)">#</th>
+                                    <th class="sortable" onclick="sortTable('analyzed_articles_table', 1)">{t('doi')}</th>
+                                    <th class="sortable" onclick="sortTable('analyzed_articles_table', 2)">{t('title')}</th>
+                                    <th class="sortable" onclick="sortTable('analyzed_articles_table', 3)">{t('authors')}</th>
+                                    <th class="sortable" onclick="sortTable('analyzed_articles_table', 4)">{t('year')}</th>
+                                    <th class="sortable" onclick="sortTable('analyzed_articles_table', 5)">{t('journal')}</th>
+                                    <th class="sortable" onclick="sortTable('analyzed_articles_table', 6)">{t('affiliations')}</th>
+                                    <th class="sortable" onclick="sortTable('analyzed_articles_table', 7)">{t('countries')}</th>
+                                    <th class="sortable" onclick="sortTable('analyzed_articles_table', 8)">{t('citations')}</th>
+                                    <th class="sortable" onclick="sortTable('analyzed_articles_table', 9)">{t('open_access')}</th>
+                                    <th>{t('topics')}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {''.join([
+                                    f'''
+                                    <tr>
+                                        <td>{i+1}</td>
+                                        <td>
+                                            <a href="https://doi.org/{html.escape(article['doi'])}" target="_blank" class="doi-link">
+                                                {html.escape(article['doi'][:25])}{'...' if len(article['doi']) > 25 else ''}
+                                            </a>
+                                        </td>
+                                        <td class="word-wrap" style="max-width: 250px;">
+                                            <strong>{html.escape(article['title'][:80])}{'...' if len(article['title']) > 80 else ''}</strong>
+                                        </td>
+                                        <td style="font-size: 12px; max-width: 150px;">
+                                            {html.escape(article['authors'])}
+                                        </td>
+                                        <td>{article['year'] or 'N/A'}</td>
+                                        <td style="font-size: 12px; max-width: 120px;">
+                                            {html.escape(article['journal'])}
+                                        </td>
+                                        <td style="font-size: 11px; max-width: 120px;">
+                                            {html.escape(article['affiliations'])}
+                                        </td>
+                                        <td style="font-size: 11px;">
+                                            {', '.join(article['countries_full'][:2]) if article['countries_full'] else 'N/A'}
+                                            {f' +{len(article["countries_full"])-2}' if len(article.get("countries_full", [])) > 2 else ''}
+                                        </td>
+                                        <td>
+                                            <span class="citation-count">{article['citations']}</span>
+                                        </td>
+                                        <td>
+                                            {f'<span class="badge badge-success">✅ OA</span>' if article['is_oa'] else '<span class="badge badge-closed">🔒 Closed</span>'}
+                                            <span style="font-size: 10px; color: #999;">{article['oa_status']}</span>
+                                        </td>
+                                        <td style="font-size: 11px; max-width: 120px;">
+                                            {html.escape(article['topics'])}
+                                        </td>
+                                    </tr>
+                                    '''
+                                    for i, article in enumerate(analyzed_articles_list)
+                                ])}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div style="margin-top: 8px; font-size: 12px; color: #999;">
+                        {len(analyzed_articles_list)} {t('analyzed_articles')} | 
+                        {sum([1 for a in analyzed_articles_list if a['is_oa']])} Open Access | 
+                        {len(set([a['journal'] for a in analyzed_articles_list]))} unique journals
+                    </div>
+                    
+                    <!-- Geographic Analysis (existing) -->
                     <h3 style="color: {primary}; font-size: 16px; margin-top: 20px;">{t('geographic_analysis')}</h3>
                     
                     <div class="geo-grid">
