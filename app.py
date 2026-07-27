@@ -100,12 +100,12 @@ LANG = {
         'reports': '📄 Reports',
         'doi_input': 'DOI(s) to analyze',
         'doi_placeholder': '10.1016/j.jechem.2024.02.047\n10.1021/acs.chemrev.3c00123\nhttps://doi.org/10.1039/D4TA00001A',
-        'doi_help': 'Enter one or more DOIs. Supports: plain DOI, URL format, separated by newlines, commas, semicolons, or spaces. Maximum 50 DOIs.',
+        'doi_help': 'Enter one or more DOIs. Supports: plain DOI, URL format, separated by newlines, commas, semicolons, or spaces. Maximum 100 DOIs.',
         'workers': 'Parallel Workers',
         'workers_help': 'Number of parallel threads for API requests',
         'analyze_button': '🔍 Analyze DOI Network',
         'no_doi': '⚠️ Enter at least one valid DOI',
-        'too_many_dois': '⚠️ Maximum 50 DOIs allowed. You entered {count}.',
+        'too_many_dois': '⚠️ Maximum 100 DOIs allowed. You entered {count}.',
         'duplicate_dois': '⚠️ Found {count} duplicate DOIs. Using unique values.',
         'analysis_complete': '✅ Analysis complete! Found {level1} references, {level2} analyzed, {level3} citing works in {time:.1f} sec.',
         'no_data': '👈 Load data and click "Analyze DOI Network"',
@@ -6891,7 +6891,7 @@ def run_multilevel_analysis(doi_input: str, max_workers: int = 6):
         st.warning(t('duplicate_dois', count=duplicates))
     
     # Check maximum
-    if len(unique_dois) > 50:
+    if len(unique_dois) > 100:
         st.error(t('too_many_dois', count=len(unique_dois)))
         return
     
