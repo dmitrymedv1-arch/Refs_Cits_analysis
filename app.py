@@ -99,7 +99,7 @@ LANG = {
         'profile': 'Scholar Profile',
         'reports': '📄 Reports',
         'doi_input': 'DOI(s) to analyze',
-        'doi_placeholder': '10.1016/j.jechem.2024.02.047\n10.1021/acs.chemrev.3c00123\nhttps://doi.org/10.1039/D4TA00001A',
+        'doi_placeholder': '10.1000/xxx.yyy\nhttps://doi.org/10.1000/xxx.yyy',
         'doi_help': 'Enter one or more DOIs. Supports: plain DOI, URL format, separated by newlines, commas, semicolons, or spaces. Maximum 100 DOIs.',
         'workers': 'Parallel Workers',
         'workers_help': 'Number of parallel threads for API requests',
