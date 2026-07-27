@@ -3048,7 +3048,7 @@ class DOIAnalyzer:
         }
     
     def _analyze_authors(self) -> Dict:
-        """Analyze authors for Level II only"""
+        """Analyze authors for Level II only with ORCID-based merging"""
         author_stats = defaultdict(lambda: {
             'publications': 0,
             'citations': 0,
@@ -3080,9 +3080,12 @@ class DOIAnalyzer:
                         if country:
                             author_stats[name]['countries'].add(country)
         
+        # MERGE AUTHORS BY ORCID AND NORMALIZED NAMES
+        merged_stats = self._merge_authors_by_orcid(dict(author_stats))
+        
         # Sort by publications
         sorted_authors = sorted(
-            author_stats.items(),
+            merged_stats.items(),
             key=lambda x: x[1]['publications'],
             reverse=True
         )
@@ -3093,9 +3096,9 @@ class DOIAnalyzer:
                     'name': name,
                     'publications': data['publications'],
                     'citations': data['citations'],
-                    'orcid': data['orcid'],
-                    'affiliations': list(data['affiliations'])[:5],
-                    'countries': list(data['countries'])[:5]
+                    'orcid': data.get('orcid'),
+                    'affiliations': list(data.get('affiliations', []))[:5],
+                    'countries': list(data.get('countries', []))[:5]
                 }
                 for name, data in sorted_authors
             ]
@@ -3437,9 +3440,11 @@ class DOIAnalyzer:
         total_citing = sum(self.level_III.values())
         
         # Authors aggregation with ORCID deduplication
-        authors_aggregated = {}
-        orcid_to_key = {}
-        normalized_to_keys = defaultdict(list)
+        author_stats = defaultdict(lambda: {
+            'count': 0,
+            'orcid': None,
+            'names_seen': set()
+        })
         
         # Affiliations with ROR
         affiliations_by_ror = defaultdict(lambda: {
@@ -3453,17 +3458,17 @@ class DOIAnalyzer:
         journals = defaultdict(int)
         publishers = defaultdict(int)
         
-        # ===== NEW: Track weighted count for each citing work =====
-        citing_works_weighted = {}  # {citing_doi: weighted_count}
+        # Track weighted count for each citing work
+        citing_works_weighted = {}
         
         for citing_doi, weight in self.level_III.items():
             meta = self.metadata_III.get(citing_doi, {})
             
-            # ===== NEW: Calculate weighted count = number of Level II DOIs cited =====
+            # Calculate weighted count = number of Level II DOIs cited
             weighted_count = len(self.citations_from_III_to_II.get(citing_doi, []))
             citing_works_weighted[citing_doi] = weighted_count
             
-            # Authors (with weight)
+            # Collect authors
             authors_with_orcids = meta.get('authors_with_orcids', [])
             for auth in authors_with_orcids:
                 name = auth.get('name', '')
@@ -3472,61 +3477,10 @@ class DOIAnalyzer:
                 if not name:
                     continue
                 
-                normalized_name = normalize_author_name_for_grouping(name)
-                key = None
-                
-                if orcid:
-                    if orcid in orcid_to_key:
-                        key = orcid_to_key[orcid]
-                    else:
-                        for existing_key in normalized_to_keys.get(normalized_name, []):
-                            if existing_key in authors_aggregated:
-                                existing_orcid = authors_aggregated[existing_key].get('orcid')
-                                if not existing_orcid:
-                                    key = existing_key
-                                    authors_aggregated[key]['orcid'] = orcid
-                                    orcid_to_key[orcid] = key
-                                    break
-                        
-                        if key is None:
-                            key = f"orcid_{orcid}"
-                            authors_aggregated[key] = {
-                                'name': name,
-                                'orcid': orcid,
-                                'count': 0,
-                                'names_seen': set([name])
-                            }
-                            orcid_to_key[orcid] = key
-                            normalized_to_keys[normalized_name].append(key)
-                else:
-                    found = False
-                    for existing_key in normalized_to_keys.get(normalized_name, []):
-                        if existing_key in authors_aggregated:
-                            existing_orcid = authors_aggregated[existing_key].get('orcid')
-                            if not existing_orcid:
-                                key = existing_key
-                                found = True
-                                break
-                    
-                    if not found:
-                        key = f"name_{normalized_name}_{len(authors_aggregated)}"
-                        authors_aggregated[key] = {
-                            'name': name,
-                            'orcid': None,
-                            'count': 0,
-                            'names_seen': set([name])
-                        }
-                        normalized_to_keys[normalized_name].append(key)
-                
-                if key:
-                    authors_aggregated[key]['count'] += weight  # Weighted count!
-                    authors_aggregated[key]['names_seen'].add(name)
-                    
-                    current_name = authors_aggregated[key]['name']
-                    if orcid and (not current_name or len(name) > len(current_name)):
-                        authors_aggregated[key]['name'] = name
-                    elif not orcid and len(name) > len(current_name):
-                        authors_aggregated[key]['name'] = name
+                author_stats[name]['count'] += weight
+                author_stats[name]['names_seen'].add(name)
+                if orcid and not author_stats[name]['orcid']:
+                    author_stats[name]['orcid'] = orcid
             
             # Countries (with weight)
             work_countries = set(meta.get('affiliation_countries', []))
@@ -3581,17 +3535,32 @@ class DOIAnalyzer:
                         }
                     affiliations_by_ror[ror_id]['count'] += weight
         
-        # Sort
-        top_authors = sorted(
-            [{
-                'name': data['name'],
+        # Convert author_stats to mergeable format
+        mergeable_stats = {}
+        for name, data in author_stats.items():
+            mergeable_stats[name] = {
+                'publications': data['count'],
+                'citations': 0,
                 'orcid': data['orcid'],
-                'count': data['count']
-            } for data in authors_aggregated.values() if data['count'] > 0],
-            key=lambda x: x['count'],
-            reverse=True
-        )
+                'affiliations': [],
+                'countries': []
+            }
         
+        # MERGE AUTHORS BY ORCID AND NORMALIZED NAMES
+        merged_stats = self._merge_authors_by_orcid(mergeable_stats)
+        
+        # Convert back to citing format
+        top_authors = []
+        for name, data in merged_stats.items():
+            top_authors.append({
+                'name': name,
+                'orcid': data.get('orcid'),
+                'count': data['publications']
+            })
+        
+        top_authors.sort(key=lambda x: x['count'], reverse=True)
+        
+        # Sort affiliations
         top_affiliations = sorted(
             [{
                 'name': data['name'],
@@ -3607,16 +3576,16 @@ class DOIAnalyzer:
         top_journals = sorted(journals.items(), key=lambda x: x[1], reverse=True)
         top_publishers = sorted(publishers.items(), key=lambda x: x[1], reverse=True)
         
-        # ===== NEW: Sort citing works by weighted count =====
+        # Sort citing works by weighted count
         sorted_citing_by_weight = sorted(
             citing_works_weighted.items(),
             key=lambda x: x[1],
             reverse=True
         )
         
-        # ===== NEW: Build citing works with weighted counts for display =====
+        # Build citing works with weighted counts for display
         citing_works_with_weight = []
-        for citing_doi, weighted_count in sorted_citing_by_weight[:50]:  # Top 50
+        for citing_doi, weighted_count in sorted_citing_by_weight[:50]:
             meta = self.metadata_III.get(citing_doi, {})
             citing_works_with_weight.append({
                 'doi': citing_doi,
@@ -3635,7 +3604,6 @@ class DOIAnalyzer:
             'top_countries': [{'name': name, 'count': count} for name, count in top_countries],
             'top_journals': [{'name': name, 'count': count} for name, count in top_journals],
             'top_publishers': [{'name': name, 'count': count} for name, count in top_publishers],
-            # ===== NEW: Weighted citing works =====
             'citing_works_weighted': citing_works_with_weight,
             'max_weighted_count': max(citing_works_weighted.values()) if citing_works_weighted else 0
         }
@@ -4050,6 +4018,134 @@ class DOIAnalyzer:
         result.sort(key=lambda x: (x.get('year') or 0, x.get('citations', 0)), reverse=True)
         
         return result
+
+    def _merge_authors_by_orcid(self, author_stats: dict) -> dict:
+        """Merge authors by ORCID and normalized names"""
+        
+        def normalize_for_merge(name: str) -> str:
+            """Extract last name + first initial for matching"""
+            if not name:
+                return ''
+            name = name.strip()
+            parts = name.split()
+            if len(parts) >= 2:
+                last = parts[-1]
+                first_init = parts[0][0] if parts[0] else ''
+                return f"{last} {first_init}".lower()
+            return name.lower()
+        
+        # Group by ORCID (if exists)
+        orcid_groups = {}
+        no_orcid_groups = {}
+        name_variants = defaultdict(set)
+        
+        for name, data in author_stats.items():
+            orcid = data.get('orcid')
+            norm_name = normalize_for_merge(name)
+            name_variants[norm_name].add(name)
+            
+            if orcid:
+                if orcid not in orcid_groups:
+                    orcid_groups[orcid] = []
+                orcid_groups[orcid].append((name, data))
+            else:
+                key = (norm_name, tuple(sorted(data.get('affiliations', []))[:2]))
+                if key not in no_orcid_groups:
+                    no_orcid_groups[key] = []
+                no_orcid_groups[key].append((name, data))
+        
+        # Merge by ORCID
+        merged = {}
+        for orcid, entries in orcid_groups.items():
+            if len(entries) == 1:
+                name, data = entries[0]
+                merged[name] = data.copy()
+                continue
+            
+            # Merge multiple entries with same ORCID
+            merged_data = {
+                'publications': 0,
+                'citations': 0,
+                'orcid': orcid,
+                'affiliations': set(),
+                'countries': set(),
+                'names': set()
+            }
+            
+            for name, data in entries:
+                merged_data['publications'] += data['publications']
+                merged_data['citations'] += data['citations']
+                merged_data['affiliations'].update(data.get('affiliations', []))
+                merged_data['countries'].update(data.get('countries', []))
+                merged_data['names'].add(name)
+            
+            # Choose best name (most complete or most common)
+            best_name = max(merged_data['names'], key=lambda x: (len(x), x.count(' ')))
+            merged[best_name] = {
+                'publications': merged_data['publications'],
+                'citations': merged_data['citations'],
+                'orcid': merged_data['orcid'],
+                'affiliations': list(merged_data['affiliations']),
+                'countries': list(merged_data['countries'])
+            }
+        
+        # Merge no-ORCID entries with similar names and affiliations
+        for key, entries in no_orcid_groups.items():
+            if len(entries) == 1:
+                name, data = entries[0]
+                if name not in merged:
+                    merged[name] = data.copy()
+                continue
+            
+            # Check if any entry matches with ORCID entries by name
+            for name, data in entries:
+                norm_name = normalize_for_merge(name)
+                found_match = False
+                
+                # Try to match with ORCID entries
+                for existing_name, existing_data in merged.items():
+                    if normalize_for_merge(existing_name) == norm_name:
+                        # Merge
+                        existing_data['publications'] += data['publications']
+                        existing_data['citations'] += data['citations']
+                        existing_data['affiliations'] = list(set(existing_data.get('affiliations', []) + data.get('affiliations', [])))
+                        existing_data['countries'] = list(set(existing_data.get('countries', []) + data.get('countries', [])))
+                        found_match = True
+                        break
+                
+                if not found_match:
+                    if name not in merged:
+                        merged[name] = data.copy()
+        
+        # Re-aggregate similar names within merged dict
+        final_merged = {}
+        used_names = set()
+        
+        for name, data in merged.items():
+            norm_name = normalize_for_merge(name)
+            
+            # Check if similar name already exists
+            matched = False
+            for existing_name in list(final_merged.keys()):
+                if normalize_for_merge(existing_name) == norm_name:
+                    # Merge
+                    final_merged[existing_name]['publications'] += data['publications']
+                    final_merged[existing_name]['citations'] += data['citations']
+                    final_merged[existing_name]['affiliations'] = list(set(
+                        final_merged[existing_name].get('affiliations', []) + data.get('affiliations', [])
+                    ))
+                    final_merged[existing_name]['countries'] = list(set(
+                        final_merged[existing_name].get('countries', []) + data.get('countries', [])
+                    ))
+                    if not final_merged[existing_name].get('orcid') and data.get('orcid'):
+                        final_merged[existing_name]['orcid'] = data['orcid']
+                    matched = True
+                    break
+            
+            if not matched:
+                final_merged[name] = data.copy()
+        
+        return final_merged
 
     # ============================================
     # ============================================
