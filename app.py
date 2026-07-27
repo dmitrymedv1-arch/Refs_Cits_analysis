@@ -4338,13 +4338,13 @@ class DOIAnalyzer:
     def _analyze_temporal_relationships(self) -> Dict:
         """
         Analyze temporal relationships between levels with heatmap visualization
-        1. Reference → Analyzed (time lag between reference and analyzed article)
-        2. Analyzed → Citing (time lag between analyzed and citing article)
+        1. Reference → Analyzed: X-axis = Reference years, Y-axis = Analyzed years
+        2. Analyzed → Citing: X-axis = Analyzed years, Y-axis = Citing years
         """
         ref_to_analyzed_connections = []
         analyzed_to_citing_connections = []
         
-        # Heatmap data: years vs years
+        # Heatmap data
         ref_analyzed_heatmap = defaultdict(lambda: defaultdict(int))
         analyzed_citing_heatmap = defaultdict(lambda: defaultdict(int))
         
@@ -4373,7 +4373,6 @@ class DOIAnalyzer:
             if not ref_year:
                 continue
             
-            # Find which analyzed articles cite this reference
             analyzed_dois = []
             for analyzed_doi, ref_list in self.citations_from_II_to_I.items():
                 if ref_doi in ref_list:
@@ -4404,7 +4403,6 @@ class DOIAnalyzer:
                         ref_analyzed_lags.append(lag_days)
                         ref_years.add(ref_year)
                         analyzed_years_from_ref.add(analyzed_year)
-                        # Heatmap: ref_year -> analyzed_year
                         ref_analyzed_heatmap[ref_year][analyzed_year] += 1
         
         # 2. Analyzed → Citing connections with heatmap
@@ -4419,7 +4417,6 @@ class DOIAnalyzer:
             if not citing_year:
                 continue
             
-            # Find which analyzed articles this citing work cites
             analyzed_dois = self.citations_from_III_to_II.get(citing_doi, [])
             
             for analyzed_doi in analyzed_dois:
@@ -4447,22 +4444,21 @@ class DOIAnalyzer:
                         analyzed_citing_lags.append(lag_days)
                         analyzed_years_from_citing.add(analyzed_year)
                         citing_years.add(citing_year)
-                        # Heatmap: analyzed_year -> citing_year
                         analyzed_citing_heatmap[analyzed_year][citing_year] += 1
         
         # Build heatmap data with independent year ranges
-        def build_heatmap_data(heatmap_dict, row_years, col_years):
+        def build_heatmap_data(heatmap_dict, row_years_set, col_years_set):
+            row_years = sorted([y for y in row_years_set if y and y > 1900])
+            col_years = sorted([y for y in col_years_set if y and y > 1900])
+            
+            if not row_years or not col_years:
+                return [], row_years, col_years
+            
             heatmap_rows = []
-            row_years_sorted = sorted([y for y in row_years if y and y > 1900])
-            col_years_sorted = sorted([y for y in col_years if y and y > 1900])
-            
-            if not row_years_sorted or not col_years_sorted:
-                return [], row_years_sorted, col_years_sorted
-            
-            for pub_year in row_years_sorted:
+            for pub_year in row_years:
                 row = {'publication_year': pub_year}
                 has_data = False
-                for cite_year in col_years_sorted:
+                for cite_year in col_years:
                     if cite_year < pub_year:
                         row[cite_year] = None
                         continue
@@ -4475,7 +4471,7 @@ class DOIAnalyzer:
                 if has_data or pub_year in heatmap_dict:
                     heatmap_rows.append(row)
             
-            return heatmap_rows, row_years_sorted, col_years_sorted
+            return heatmap_rows, row_years, col_years
         
         ref_heatmap_data, ref_row_years, ref_col_years = build_heatmap_data(
             ref_analyzed_heatmap, ref_years, analyzed_years_from_ref
