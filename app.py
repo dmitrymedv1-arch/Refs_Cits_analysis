@@ -3048,7 +3048,7 @@ class DOIAnalyzer:
         }
     
     def _analyze_authors(self) -> Dict:
-        """Analyze authors for Level II only with ORCID-based merging"""
+        """Analyze authors for Level II only with ORCID-based merging and personal affiliations only"""
         author_stats = defaultdict(lambda: {
             'publications': 0,
             'citations': 0,
@@ -3061,24 +3061,68 @@ class DOIAnalyzer:
             meta = self.metadata_II.get(doi, {})
             citations = meta.get('cited_by_count', 0)
             authors_with_orcids = meta.get('authors_with_orcids', [])
+            authorships_raw = meta.get('authorships_raw', [])
             
+            # Create mapping from author name to their affiliations in this work
+            author_affiliations_map = {}
+            author_countries_map = {}
+            
+            for auth in authorships_raw:
+                auth_name = auth.get('author', '')
+                if not auth_name:
+                    continue
+                
+                # Get institutions for this specific author
+                inst_names = []
+                inst_countries = []
+                
+                for inst in auth.get('institutions', []):
+                    inst_name = inst.get('display_name', '')
+                    if inst_name:
+                        inst_names.append(inst_name)
+                    
+                    country_code = inst.get('country_code', '')
+                    if country_code:
+                        country_name = get_full_country_name(country_code)
+                        if country_name and country_name != 'Unknown':
+                            inst_countries.append(country_name)
+                
+                # Also check raw_affiliation_strings if institutions are empty
+                if not inst_names and auth.get('raw_affiliation_strings'):
+                    for aff_str in auth.get('raw_affiliation_strings', []):
+                        if aff_str:
+                            inst_names.append(aff_str)
+                            # Try to extract country from raw string
+                            country = extract_country_from_affiliation(aff_str)
+                            if country and country != 'Unknown':
+                                inst_countries.append(country)
+                
+                author_affiliations_map[auth_name] = inst_names
+                author_countries_map[auth_name] = list(set(inst_countries))
+            
+            # Now process each author and add only their personal affiliations
             for auth in authors_with_orcids:
                 name = auth.get('name', '')
                 orcid = auth.get('orcid')
                 
-                if name:
-                    author_stats[name]['publications'] += 1
-                    author_stats[name]['citations'] += citations
-                    if orcid:
-                        author_stats[name]['orcid'] = orcid
-                    
-                    for aff in meta.get('affiliations', []):
-                        if aff:
-                            author_stats[name]['affiliations'].add(aff)
-                    
-                    for country in meta.get('affiliation_countries', []):
-                        if country:
-                            author_stats[name]['countries'].add(country)
+                if not name:
+                    continue
+                
+                author_stats[name]['publications'] += 1
+                author_stats[name]['citations'] += citations
+                if orcid:
+                    author_stats[name]['orcid'] = orcid
+                
+                # Add only this author's personal affiliations from this work
+                personal_affs = author_affiliations_map.get(name, [])
+                for aff in personal_affs:
+                    if aff:
+                        author_stats[name]['affiliations'].add(aff)
+                
+                personal_countries = author_countries_map.get(name, [])
+                for country in personal_countries:
+                    if country:
+                        author_stats[name]['countries'].add(country)
         
         # MERGE AUTHORS BY ORCID AND NORMALIZED NAMES
         merged_stats = self._merge_authors_by_orcid(dict(author_stats))
