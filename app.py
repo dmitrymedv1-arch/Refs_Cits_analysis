@@ -4730,6 +4730,10 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
     ref_analyzed_connections = temporal.get('ref_to_analyzed', {}).get('connections', [])
     analyzed_citing_connections = temporal.get('analyzed_to_citing', {}).get('connections', [])
     
+    # Statistics for display
+    ref_analyzed_stats = temporal.get('ref_to_analyzed', {}).get('stats', {})
+    analyzed_citing_stats = temporal.get('analyzed_to_citing', {}).get('stats', {})
+    
     # Helper for color scale in matrices
     def get_color_scale_html(value, max_val, min_val=0):
         if max_val == min_val:
