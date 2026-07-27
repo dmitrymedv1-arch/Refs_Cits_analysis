@@ -7037,7 +7037,7 @@ def main():
     # Page configuration
     st.set_page_config(
         page_title="Ref-Cit-Analysis",
-        page_icon="📚",
+        page_icon="logo.jpg",
         layout="wide",
         initial_sidebar_state="expanded"
     )
