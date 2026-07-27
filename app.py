@@ -4338,13 +4338,13 @@ class DOIAnalyzer:
     def _analyze_temporal_relationships(self) -> Dict:
         """
         Analyze temporal relationships between levels with heatmap visualization
-        1. Reference → Analyzed: X-axis = Reference years, Y-axis = Analyzed years
-        2. Analyzed → Citing: X-axis = Analyzed years, Y-axis = Citing years
+        1. Reference → Analyzed (time lag between reference and analyzed article)
+        2. Analyzed → Citing (time lag between analyzed and citing article)
         """
         ref_to_analyzed_connections = []
         analyzed_to_citing_connections = []
         
-        # Heatmap data
+        # Heatmap data: years vs years
         ref_analyzed_heatmap = defaultdict(lambda: defaultdict(int))
         analyzed_citing_heatmap = defaultdict(lambda: defaultdict(int))
         
@@ -4361,10 +4361,42 @@ class DOIAnalyzer:
             except:
                 return None
         
-        # 1. Reference → Analyzed connections with heatmap
-        ref_years = set()
-        analyzed_years_from_ref = set()
+        # Get all years from all levels for heatmap axes
+        all_years = set()
         
+        # For Reference → Analyzed: use years from Level I (references)
+        ref_years = set()
+        for doi in self.level_I.keys():
+            meta = self.metadata_I.get(doi, {})
+            year = meta.get('publication_year')
+            if year:
+                ref_years.add(year)
+                all_years.add(year)
+        
+        # For Analyzed → Citing: use years from Level II (analyzed) and Level III (citing)
+        analyzed_years = set()
+        citing_years = set()
+        
+        for doi in self.level_II:
+            meta = self.metadata_II.get(doi, {})
+            year = meta.get('publication_year')
+            if year:
+                analyzed_years.add(year)
+                all_years.add(year)
+        
+        for doi in self.level_III.keys():
+            meta = self.metadata_III.get(doi, {})
+            year = meta.get('publication_year')
+            if year:
+                citing_years.add(year)
+                all_years.add(year)
+        
+        all_years = sorted([y for y in all_years if y and y > 1900])
+        ref_years = sorted([y for y in ref_years if y and y > 1900])
+        analyzed_years = sorted([y for y in analyzed_years if y and y > 1900])
+        citing_years = sorted([y for y in citing_years if y and y > 1900])
+        
+        # 1. Reference → Analyzed connections with heatmap
         for ref_doi, weight in self.level_I.items():
             ref_meta = self.metadata_I.get(ref_doi, {})
             ref_date = parse_date(ref_meta.get('publication_date'))
@@ -4373,6 +4405,7 @@ class DOIAnalyzer:
             if not ref_year:
                 continue
             
+            # Find which analyzed articles cite this reference
             analyzed_dois = []
             for analyzed_doi, ref_list in self.citations_from_II_to_I.items():
                 if ref_doi in ref_list:
@@ -4401,14 +4434,12 @@ class DOIAnalyzer:
                             'analyzed_title': analyzed_meta.get('title', 'No title')[:50]
                         })
                         ref_analyzed_lags.append(lag_days)
-                        ref_years.add(ref_year)
-                        analyzed_years_from_ref.add(analyzed_year)
-                        ref_analyzed_heatmap[ref_year][analyzed_year] += 1
+                        
+                        # Heatmap: ref_year -> analyzed_year
+                        if ref_year in ref_years and analyzed_year in all_years:
+                            ref_analyzed_heatmap[ref_year][analyzed_year] += 1
         
         # 2. Analyzed → Citing connections with heatmap
-        analyzed_years_from_citing = set()
-        citing_years = set()
-        
         for citing_doi, weight in self.level_III.items():
             citing_meta = self.metadata_III.get(citing_doi, {})
             citing_date = parse_date(citing_meta.get('publication_date'))
@@ -4417,6 +4448,7 @@ class DOIAnalyzer:
             if not citing_year:
                 continue
             
+            # Find which analyzed articles this citing work cites
             analyzed_dois = self.citations_from_III_to_II.get(citing_doi, [])
             
             for analyzed_doi in analyzed_dois:
@@ -4442,23 +4474,18 @@ class DOIAnalyzer:
                             'citing_title': citing_meta.get('title', 'No title')[:50]
                         })
                         analyzed_citing_lags.append(lag_days)
-                        analyzed_years_from_citing.add(analyzed_year)
-                        citing_years.add(citing_year)
-                        analyzed_citing_heatmap[analyzed_year][citing_year] += 1
+                        
+                        # Heatmap: analyzed_year -> citing_year
+                        if analyzed_year in analyzed_years and citing_year in citing_years:
+                            analyzed_citing_heatmap[analyzed_year][citing_year] += 1
         
-        # Build heatmap data with independent year ranges
-        def build_heatmap_data(heatmap_dict, row_years_set, col_years_set):
-            row_years = sorted([y for y in row_years_set if y and y > 1900])
-            col_years = sorted([y for y in col_years_set if y and y > 1900])
-            
-            if not row_years or not col_years:
-                return [], row_years, col_years
-            
+        # Build heatmap data for HTML
+        def build_heatmap_data(heatmap_dict, x_years, y_years):
             heatmap_rows = []
-            for pub_year in row_years:
+            for pub_year in y_years:
                 row = {'publication_year': pub_year}
                 has_data = False
-                for cite_year in col_years:
+                for cite_year in x_years:
                     if cite_year < pub_year:
                         row[cite_year] = None
                         continue
@@ -4470,16 +4497,13 @@ class DOIAnalyzer:
                         row[cite_year] = 0
                 if has_data or pub_year in heatmap_dict:
                     heatmap_rows.append(row)
-            
-            return heatmap_rows, row_years, col_years
+            return heatmap_rows
         
-        ref_heatmap_data, ref_row_years, ref_col_years = build_heatmap_data(
-            ref_analyzed_heatmap, ref_years, analyzed_years_from_ref
-        )
+        # For Reference → Analyzed: Y-axis = ref_years, X-axis = all_years (analyzed years)
+        ref_heatmap_data = build_heatmap_data(ref_analyzed_heatmap, all_years, ref_years)
         
-        citing_heatmap_data, citing_row_years, citing_col_years = build_heatmap_data(
-            analyzed_citing_heatmap, analyzed_years_from_citing, citing_years
-        )
+        # For Analyzed → Citing: Y-axis = analyzed_years, X-axis = citing_years
+        citing_heatmap_data = build_heatmap_data(analyzed_citing_heatmap, citing_years, analyzed_years)
         
         # Calculate statistics
         ref_analyzed_stats = {}
@@ -4525,8 +4549,7 @@ class DOIAnalyzer:
                 'total_connections': len(ref_to_analyzed_connections),
                 'stats': ref_analyzed_stats,
                 'heatmap': ref_heatmap_data,
-                'row_years': ref_row_years,
-                'col_years': ref_col_years,
+                'heatmap_years': all_years,
                 'lag_distribution': ref_lag_dist
             },
             'analyzed_to_citing': {
@@ -4534,10 +4557,13 @@ class DOIAnalyzer:
                 'total_connections': len(analyzed_to_citing_connections),
                 'stats': analyzed_citing_stats,
                 'heatmap': citing_heatmap_data,
-                'row_years': citing_row_years,
-                'col_years': citing_col_years,
+                'heatmap_years': citing_years,
                 'lag_distribution': citing_lag_dist
-            }
+            },
+            'all_years': all_years,
+            'ref_years': ref_years,
+            'analyzed_years': analyzed_years,
+            'citing_years': citing_years
         }
 
 # ============================================
