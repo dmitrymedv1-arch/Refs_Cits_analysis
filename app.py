@@ -4108,8 +4108,8 @@ class DOIAnalyzer:
                         # Merge
                         existing_data['publications'] += data['publications']
                         existing_data['citations'] += data['citations']
-                        existing_data['affiliations'] = list(set(existing_data.get('affiliations', []) + data.get('affiliations', [])))
-                        existing_data['countries'] = list(set(existing_data.get('countries', []) + data.get('countries', [])))
+                        existing_data['affiliations'] = list(set(existing_data.get('affiliations', set())) | set(data.get('affiliations', set())))
+                        existing_data['countries'] = list(set(existing_data.get('countries', set())) | set(data.get('countries', set())))
                         found_match = True
                         break
                 
@@ -4131,12 +4131,12 @@ class DOIAnalyzer:
                     # Merge
                     final_merged[existing_name]['publications'] += data['publications']
                     final_merged[existing_name]['citations'] += data['citations']
-                    final_merged[existing_name]['affiliations'] = list(set(
-                        final_merged[existing_name].get('affiliations', []) + data.get('affiliations', [])
-                    ))
-                    final_merged[existing_name]['countries'] = list(set(
-                        final_merged[existing_name].get('countries', []) + data.get('countries', [])
-                    ))
+                    final_merged[existing_name]['affiliations'] = list(
+                        set(final_merged[existing_name].get('affiliations', set())) | set(data.get('affiliations', set()))
+                    )
+                    final_merged[existing_name]['countries'] = list(
+                        set(final_merged[existing_name].get('countries', set())) | set(data.get('countries', set()))
+                    )
                     if not final_merged[existing_name].get('orcid') and data.get('orcid'):
                         final_merged[existing_name]['orcid'] = data['orcid']
                     matched = True
