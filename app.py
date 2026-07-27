@@ -4361,29 +4361,10 @@ class DOIAnalyzer:
             except:
                 return None
         
-        # Get all years from all levels for heatmap axes
-        all_years = set()
-        for doi in self.level_II:
-            meta = self.metadata_II.get(doi, {})
-            year = meta.get('publication_year')
-            if year:
-                all_years.add(year)
-        
-        for doi in self.level_I.keys():
-            meta = self.metadata_I.get(doi, {})
-            year = meta.get('publication_year')
-            if year:
-                all_years.add(year)
-        
-        for doi in self.level_III.keys():
-            meta = self.metadata_III.get(doi, {})
-            year = meta.get('publication_year')
-            if year:
-                all_years.add(year)
-        
-        all_years = sorted([y for y in all_years if y and y > 1900])
-        
         # 1. Reference → Analyzed connections with heatmap
+        ref_years = set()
+        analyzed_years_from_ref = set()
+        
         for ref_doi, weight in self.level_I.items():
             ref_meta = self.metadata_I.get(ref_doi, {})
             ref_date = parse_date(ref_meta.get('publication_date'))
@@ -4421,12 +4402,15 @@ class DOIAnalyzer:
                             'analyzed_title': analyzed_meta.get('title', 'No title')[:50]
                         })
                         ref_analyzed_lags.append(lag_days)
-                        
+                        ref_years.add(ref_year)
+                        analyzed_years_from_ref.add(analyzed_year)
                         # Heatmap: ref_year -> analyzed_year
-                        if ref_year in all_years and analyzed_year in all_years:
-                            ref_analyzed_heatmap[ref_year][analyzed_year] += 1
+                        ref_analyzed_heatmap[ref_year][analyzed_year] += 1
         
         # 2. Analyzed → Citing connections with heatmap
+        analyzed_years_from_citing = set()
+        citing_years = set()
+        
         for citing_doi, weight in self.level_III.items():
             citing_meta = self.metadata_III.get(citing_doi, {})
             citing_date = parse_date(citing_meta.get('publication_date'))
@@ -4461,18 +4445,24 @@ class DOIAnalyzer:
                             'citing_title': citing_meta.get('title', 'No title')[:50]
                         })
                         analyzed_citing_lags.append(lag_days)
-                        
+                        analyzed_years_from_citing.add(analyzed_year)
+                        citing_years.add(citing_year)
                         # Heatmap: analyzed_year -> citing_year
-                        if analyzed_year in all_years and citing_year in all_years:
-                            analyzed_citing_heatmap[analyzed_year][citing_year] += 1
+                        analyzed_citing_heatmap[analyzed_year][citing_year] += 1
         
-        # Build heatmap data for HTML
-        def build_heatmap_data(heatmap_dict, years_list):
+        # Build heatmap data with independent year ranges
+        def build_heatmap_data(heatmap_dict, row_years, col_years):
             heatmap_rows = []
-            for pub_year in years_list:
+            row_years_sorted = sorted([y for y in row_years if y and y > 1900])
+            col_years_sorted = sorted([y for y in col_years if y and y > 1900])
+            
+            if not row_years_sorted or not col_years_sorted:
+                return [], row_years_sorted, col_years_sorted
+            
+            for pub_year in row_years_sorted:
                 row = {'publication_year': pub_year}
                 has_data = False
-                for cite_year in years_list:
+                for cite_year in col_years_sorted:
                     if cite_year < pub_year:
                         row[cite_year] = None
                         continue
@@ -4484,10 +4474,16 @@ class DOIAnalyzer:
                         row[cite_year] = 0
                 if has_data or pub_year in heatmap_dict:
                     heatmap_rows.append(row)
-            return heatmap_rows
+            
+            return heatmap_rows, row_years_sorted, col_years_sorted
         
-        ref_heatmap_data = build_heatmap_data(ref_analyzed_heatmap, all_years)
-        citing_heatmap_data = build_heatmap_data(analyzed_citing_heatmap, all_years)
+        ref_heatmap_data, ref_row_years, ref_col_years = build_heatmap_data(
+            ref_analyzed_heatmap, ref_years, analyzed_years_from_ref
+        )
+        
+        citing_heatmap_data, citing_row_years, citing_col_years = build_heatmap_data(
+            analyzed_citing_heatmap, analyzed_years_from_citing, citing_years
+        )
         
         # Calculate statistics
         ref_analyzed_stats = {}
@@ -4533,7 +4529,8 @@ class DOIAnalyzer:
                 'total_connections': len(ref_to_analyzed_connections),
                 'stats': ref_analyzed_stats,
                 'heatmap': ref_heatmap_data,
-                'heatmap_years': all_years,
+                'row_years': ref_row_years,
+                'col_years': ref_col_years,
                 'lag_distribution': ref_lag_dist
             },
             'analyzed_to_citing': {
@@ -4541,10 +4538,10 @@ class DOIAnalyzer:
                 'total_connections': len(analyzed_to_citing_connections),
                 'stats': analyzed_citing_stats,
                 'heatmap': citing_heatmap_data,
-                'heatmap_years': all_years,
+                'row_years': citing_row_years,
+                'col_years': citing_col_years,
                 'lag_distribution': citing_lag_dist
-            },
-            'all_years': all_years
+            }
         }
 
 # ============================================
