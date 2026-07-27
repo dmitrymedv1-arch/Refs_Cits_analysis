@@ -78,7 +78,7 @@ import random
 
 LANG = {
     'en': {
-        'app_title': 'Multi-Level DOI Citation Analysis Tool',
+        'app_title': 'Ref-Cit-Analysis',
         'app_icon': '📚',
         'settings': '⚙️ Settings',
         'language': '🌐 Language',
@@ -183,7 +183,7 @@ LANG = {
         'y_label_pubs': 'Number of publications',
         'trend_label': 'Trend',
         'confidence_interval': 'Confidence interval',
-        'footer': '© Multi-Level DOI Citation Analysis Tool / Created by daM / Chimica Techno Acta',
+        'footer': '© Ref-Cit-Analysis / Created by daM / Chimica Techno Acta',
         'journal_url': 'https://chimicatechnoacta.ru',
         'no_profile_data': 'No profile data available',
         'enter_orcid': 'Enter ORCID to analyze',
@@ -7036,7 +7036,7 @@ def run_multilevel_analysis(doi_input: str, max_workers: int = 6):
 def main():
     # Page configuration
     st.set_page_config(
-        page_title="Multi-Level DOI Citation Analysis Tool",
+        page_title="Ref-Cit-Analysis",
         page_icon="📚",
         layout="wide",
         initial_sidebar_state="expanded"
