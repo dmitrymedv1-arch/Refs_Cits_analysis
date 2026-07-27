@@ -4337,12 +4337,20 @@ class DOIAnalyzer:
 
     def _analyze_temporal_relationships(self) -> Dict:
         """
-        Analyze temporal relationships between levels:
+        Analyze temporal relationships between levels with heatmap visualization
         1. Reference → Analyzed (time lag between reference and analyzed article)
         2. Analyzed → Citing (time lag between analyzed and citing article)
         """
         ref_to_analyzed_connections = []
         analyzed_to_citing_connections = []
+        
+        # Heatmap data: years vs years
+        ref_analyzed_heatmap = defaultdict(lambda: defaultdict(int))
+        analyzed_citing_heatmap = defaultdict(lambda: defaultdict(int))
+        
+        # Distribution of lags
+        ref_analyzed_lags = []
+        analyzed_citing_lags = []
         
         # Helper to parse date
         def parse_date(date_str):
@@ -4353,10 +4361,36 @@ class DOIAnalyzer:
             except:
                 return None
         
-        # 1. Reference → Analyzed connections
+        # Get all years from all levels for heatmap axes
+        all_years = set()
+        for doi in self.level_II:
+            meta = self.metadata_II.get(doi, {})
+            year = meta.get('publication_year')
+            if year:
+                all_years.add(year)
+        
+        for doi in self.level_I.keys():
+            meta = self.metadata_I.get(doi, {})
+            year = meta.get('publication_year')
+            if year:
+                all_years.add(year)
+        
+        for doi in self.level_III.keys():
+            meta = self.metadata_III.get(doi, {})
+            year = meta.get('publication_year')
+            if year:
+                all_years.add(year)
+        
+        all_years = sorted([y for y in all_years if y and y > 1900])
+        
+        # 1. Reference → Analyzed connections with heatmap
         for ref_doi, weight in self.level_I.items():
             ref_meta = self.metadata_I.get(ref_doi, {})
             ref_date = parse_date(ref_meta.get('publication_date'))
+            ref_year = ref_meta.get('publication_year')
+            
+            if not ref_year:
+                continue
             
             # Find which analyzed articles cite this reference
             analyzed_dois = []
@@ -4367,24 +4401,39 @@ class DOIAnalyzer:
             for analyzed_doi in analyzed_dois:
                 analyzed_meta = self.metadata_II.get(analyzed_doi, {})
                 analyzed_date = parse_date(analyzed_meta.get('publication_date'))
+                analyzed_year = analyzed_meta.get('publication_year')
+                
+                if not analyzed_year:
+                    continue
                 
                 if ref_date and analyzed_date:
                     lag_days = (analyzed_date - ref_date).days
-                    if lag_days >= 0:  # Only positive lags
+                    if lag_days >= 0:
                         ref_to_analyzed_connections.append({
                             'ref_doi': ref_doi,
                             'analyzed_doi': analyzed_doi,
                             'ref_date': ref_date.strftime('%Y-%m-%d'),
                             'analyzed_date': analyzed_date.strftime('%Y-%m-%d'),
                             'lag_days': lag_days,
+                            'ref_year': ref_year,
+                            'analyzed_year': analyzed_year,
                             'ref_title': ref_meta.get('title', 'No title')[:50],
                             'analyzed_title': analyzed_meta.get('title', 'No title')[:50]
                         })
+                        ref_analyzed_lags.append(lag_days)
+                        
+                        # Heatmap: ref_year -> analyzed_year
+                        if ref_year in all_years and analyzed_year in all_years:
+                            ref_analyzed_heatmap[ref_year][analyzed_year] += 1
         
-        # 2. Analyzed → Citing connections
+        # 2. Analyzed → Citing connections with heatmap
         for citing_doi, weight in self.level_III.items():
             citing_meta = self.metadata_III.get(citing_doi, {})
             citing_date = parse_date(citing_meta.get('publication_date'))
+            citing_year = citing_meta.get('publication_year')
+            
+            if not citing_year:
+                continue
             
             # Find which analyzed articles this citing work cites
             analyzed_dois = self.citations_from_III_to_II.get(citing_doi, [])
@@ -4392,22 +4441,55 @@ class DOIAnalyzer:
             for analyzed_doi in analyzed_dois:
                 analyzed_meta = self.metadata_II.get(analyzed_doi, {})
                 analyzed_date = parse_date(analyzed_meta.get('publication_date'))
+                analyzed_year = analyzed_meta.get('publication_year')
+                
+                if not analyzed_year:
+                    continue
                 
                 if citing_date and analyzed_date:
                     lag_days = (citing_date - analyzed_date).days
-                    if lag_days >= 0:  # Only positive lags
+                    if lag_days >= 0:
                         analyzed_to_citing_connections.append({
                             'analyzed_doi': analyzed_doi,
                             'citing_doi': citing_doi,
                             'analyzed_date': analyzed_date.strftime('%Y-%m-%d'),
                             'citing_date': citing_date.strftime('%Y-%m-%d'),
                             'lag_days': lag_days,
+                            'analyzed_year': analyzed_year,
+                            'citing_year': citing_year,
                             'analyzed_title': analyzed_meta.get('title', 'No title')[:50],
                             'citing_title': citing_meta.get('title', 'No title')[:50]
                         })
+                        analyzed_citing_lags.append(lag_days)
+                        
+                        # Heatmap: analyzed_year -> citing_year
+                        if analyzed_year in all_years and citing_year in all_years:
+                            analyzed_citing_heatmap[analyzed_year][citing_year] += 1
         
-        # Calculate statistics for Reference → Analyzed
-        ref_analyzed_lags = [c['lag_days'] for c in ref_to_analyzed_connections]
+        # Build heatmap data for HTML
+        def build_heatmap_data(heatmap_dict, years_list):
+            heatmap_rows = []
+            for pub_year in years_list:
+                row = {'publication_year': pub_year}
+                has_data = False
+                for cite_year in years_list:
+                    if cite_year < pub_year:
+                        row[cite_year] = None
+                        continue
+                    value = heatmap_dict.get(pub_year, {}).get(cite_year, 0)
+                    if value > 0:
+                        has_data = True
+                        row[cite_year] = value
+                    else:
+                        row[cite_year] = 0
+                if has_data or pub_year in heatmap_dict:
+                    heatmap_rows.append(row)
+            return heatmap_rows
+        
+        ref_heatmap_data = build_heatmap_data(ref_analyzed_heatmap, all_years)
+        citing_heatmap_data = build_heatmap_data(analyzed_citing_heatmap, all_years)
+        
+        # Calculate statistics
         ref_analyzed_stats = {}
         if ref_analyzed_lags:
             ref_analyzed_stats = {
@@ -4415,11 +4497,10 @@ class DOIAnalyzer:
                 'max': max(ref_analyzed_lags),
                 'avg': np.mean(ref_analyzed_lags),
                 'median': np.median(ref_analyzed_lags),
-                'count': len(ref_analyzed_lags)
+                'count': len(ref_analyzed_lags),
+                'std': np.std(ref_analyzed_lags)
             }
         
-        # Calculate statistics for Analyzed → Citing
-        analyzed_citing_lags = [c['lag_days'] for c in analyzed_to_citing_connections]
         analyzed_citing_stats = {}
         if analyzed_citing_lags:
             analyzed_citing_stats = {
@@ -4427,20 +4508,43 @@ class DOIAnalyzer:
                 'max': max(analyzed_citing_lags),
                 'avg': np.mean(analyzed_citing_lags),
                 'median': np.median(analyzed_citing_lags),
-                'count': len(analyzed_citing_lags)
+                'count': len(analyzed_citing_lags),
+                'std': np.std(analyzed_citing_lags)
             }
+        
+        # Calculate lag distribution bins
+        def get_lag_distribution(lags, bins=10):
+            if not lags:
+                return []
+            max_lag = max(lags)
+            bin_size = max(1, max_lag // bins)
+            hist = defaultdict(int)
+            for lag in lags:
+                bin_idx = lag // bin_size
+                hist[bin_idx * bin_size] += 1
+            return sorted(hist.items())
+        
+        ref_lag_dist = get_lag_distribution(ref_analyzed_lags)
+        citing_lag_dist = get_lag_distribution(analyzed_citing_lags)
         
         return {
             'ref_to_analyzed': {
-                'connections': ref_to_analyzed_connections[:100],  # Top 100 for display
+                'connections': ref_to_analyzed_connections[:100],
                 'total_connections': len(ref_to_analyzed_connections),
-                'stats': ref_analyzed_stats
+                'stats': ref_analyzed_stats,
+                'heatmap': ref_heatmap_data,
+                'heatmap_years': all_years,
+                'lag_distribution': ref_lag_dist
             },
             'analyzed_to_citing': {
-                'connections': analyzed_to_citing_connections[:100],  # Top 100 for display
+                'connections': analyzed_to_citing_connections[:100],
                 'total_connections': len(analyzed_to_citing_connections),
-                'stats': analyzed_citing_stats
-            }
+                'stats': analyzed_citing_stats,
+                'heatmap': citing_heatmap_data,
+                'heatmap_years': all_years,
+                'lag_distribution': citing_lag_dist
+            },
+            'all_years': all_years
         }
 
 # ============================================
@@ -4604,11 +4708,27 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
     max_keyword_norm_III = title_keywords.get('max_norm_III', 1)
     max_keyword_total_norm = title_keywords.get('max_total_norm', 1)
     
-    # ===== NEW: Max values for Temporal Relationships =====
+    # ===== NEW: Max values for Temporal Heatmaps =====
+    ref_heatmap = temporal.get('ref_to_analyzed', {}).get('heatmap', [])
+    citing_heatmap = temporal.get('analyzed_to_citing', {}).get('heatmap', [])
+    heatmap_max_ref = 0
+    for row in ref_heatmap:
+        for year, val in row.items():
+            if year != 'publication_year' and isinstance(val, (int, float)):
+                heatmap_max_ref = max(heatmap_max_ref, val)
+    heatmap_max_citing = 0
+    for row in citing_heatmap:
+        for year, val in row.items():
+            if year != 'publication_year' and isinstance(val, (int, float)):
+                heatmap_max_citing = max(heatmap_max_citing, val)
+    
+    # Lag distributions
+    ref_lag_dist = temporal.get('ref_to_analyzed', {}).get('lag_distribution', [])
+    citing_lag_dist = temporal.get('analyzed_to_citing', {}).get('lag_distribution', [])
+    
+    # Shortcuts for connections
     ref_analyzed_connections = temporal.get('ref_to_analyzed', {}).get('connections', [])
     analyzed_citing_connections = temporal.get('analyzed_to_citing', {}).get('connections', [])
-    ref_analyzed_stats = temporal.get('ref_to_analyzed', {}).get('stats', {})
-    analyzed_citing_stats = temporal.get('analyzed_to_citing', {}).get('stats', {})
     
     # Helper for color scale in matrices
     def get_color_scale_html(value, max_val, min_val=0):
@@ -6634,7 +6754,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
             </div>
             
             <!-- ============================================================ -->
-            <!-- SECTION 10: TEMPORAL RELATIONSHIPS (NEW!) -->
+            <!-- SECTION 10: TEMPORAL RELATIONSHIPS -->
             <!-- ============================================================ -->
             <div id="temporal" class="section">
                 <div class="section-header" onclick="toggleSection('temporal_content')">
@@ -6660,6 +6780,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                                 <div><strong>{t('max_lag_days')}:</strong> {ref_analyzed_stats.get('max', 'N/A')}</div>
                                 <div><strong>{t('avg_lag_days')}:</strong> {ref_analyzed_stats.get('avg', 0):.1f}</div>
                                 <div><strong>{t('median_lag_days')}:</strong> {ref_analyzed_stats.get('median', 0):.1f}</div>
+                                <div><strong>Std dev:</strong> {ref_analyzed_stats.get('std', 0):.1f}</div>
                             </div>
                         </div>
                         
@@ -6672,85 +6793,192 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                                 <div><strong>{t('max_lag_days')}:</strong> {analyzed_citing_stats.get('max', 'N/A')}</div>
                                 <div><strong>{t('avg_lag_days')}:</strong> {analyzed_citing_stats.get('avg', 0):.1f}</div>
                                 <div><strong>{t('median_lag_days')}:</strong> {analyzed_citing_stats.get('median', 0):.1f}</div>
+                                <div><strong>Std dev:</strong> {analyzed_citing_stats.get('std', 0):.1f}</div>
                             </div>
                         </div>
                     </div>
                     
-                    <!-- Reference → Analyzed Connections -->
-                    <h3 style="color: #3498DB; font-size: 16px;">{t('reference_to_analyzed')}</h3>
-                    {f'<div style="font-size: 12px; color: #666; margin-bottom: 8px;">Total: {temporal.get("ref_to_analyzed", {}).get("total_connections", 0)} connections</div>' if temporal.get('ref_to_analyzed', {}).get('connections') else ''}
-                    <div class="scrollable-table" style="max-height: 400px;">
-                        <table id="ref_analyzed_table">
+                    <!-- REF→ANALYZED HEATMAP -->
+                    <h3 style="color: #3498DB; font-size: 16px;">📊 {t('reference_to_analyzed')} - Temporal Heatmap</h3>
+                    <p style="color: #666; font-size: 12px; margin-bottom: 8px;">
+                        X-axis: Year of Analyzed article | Y-axis: Year of Reference article
+                        <span style="margin-left: 15px; font-weight: 600;">Color intensity = Number of connections</span>
+                    </p>
+                    <div class="scrollable-table" style="max-height: 500px;">
+                        <table id="ref_heatmap_table">
                             <thead>
                                 <tr>
-                                    <th class="sortable" onclick="sortTable('ref_analyzed_table', 0)">#</th>
-                                    <th class="sortable" onclick="sortTable('ref_analyzed_table', 1)">{t('ref_doi')}</th>
-                                    <th class="sortable" onclick="sortTable('ref_analyzed_table', 2)">{t('ref_date')}</th>
-                                    <th class="sortable" onclick="sortTable('ref_analyzed_table', 3)">{t('analyzed_doi')}</th>
-                                    <th class="sortable" onclick="sortTable('ref_analyzed_table', 4)">{t('analyzed_date')}</th>
-                                    <th class="sortable" onclick="sortTable('ref_analyzed_table', 5)">{t('time_lag_days')}</th>
-                                    <th>{t('title')} (Ref)</th>
-                                    <th>{t('title')} (Analyzed)</th>
+                                    <th>{t('publication_year')} (Ref) \ (Analyzed)</th>
+                                    {''.join([f'<th>{year}</th>' for year in temporal.get('all_years', [])])}
                                 </tr>
                             </thead>
                             <tbody>
                                 {''.join([
                                     f'''
                                     <tr>
-                                        <td>{i+1}</td>
-                                        <td><a href="https://doi.org/{html.escape(conn['ref_doi'])}" target="_blank" class="doi-link">{html.escape(conn['ref_doi'][:20])}...</a></td>
-                                        <td>{conn['ref_date']}</td>
-                                        <td><a href="https://doi.org/{html.escape(conn['analyzed_doi'])}" target="_blank" class="doi-link">{html.escape(conn['analyzed_doi'][:20])}...</a></td>
-                                        <td>{conn['analyzed_date']}</td>
-                                        <td>{get_color_scale_html(conn['lag_days'], max([c['lag_days'] for c in ref_analyzed_connections]) if ref_analyzed_connections else 1)}</td>
-                                        <td class="word-wrap" style="font-size: 11px; max-width: 150px;">{html.escape(conn['ref_title'])}</td>
-                                        <td class="word-wrap" style="font-size: 11px; max-width: 150px;">{html.escape(conn['analyzed_title'])}</td>
+                                        <td><strong>{row.get("publication_year", "N/A")}</strong></td>
+                                        {''.join([
+                                            f'<td class="heatmap-cell" style="{f"background: {get_heatmap_cell_color(row.get(year, 0), heatmap_max_ref)};" if row.get(year) is not None and row.get(year) > 0 else "background: transparent;"} color: {"#1a1a1a" if row.get(year) is not None and row.get(year) > 0 and row.get(year)/max(heatmap_max_ref, 1) > 0.6 else "#333" if row.get(year) is not None and row.get(year) > 0 else "transparent"};">{row.get(year) if row.get(year) is not None and row.get(year) > 0 else ""}</td>'
+                                            for year in temporal.get('all_years', [])
+                                        ])}
                                     </tr>
                                     '''
-                                    for i, conn in enumerate(ref_analyzed_connections[:50])
+                                    for row in temporal.get('ref_to_analyzed', {}).get('heatmap', [])
                                 ])}
                             </tbody>
                         </table>
                     </div>
-                    {f'<div style="margin-top: 8px; font-size: 12px; color: #999;">Showing {min(50, len(ref_analyzed_connections))} of {len(ref_analyzed_connections)} connections</div>' if ref_analyzed_connections else '<div style="color: #999; font-style: italic;">No connections found</div>'}
                     
-                    <!-- Analyzed → Citing Connections -->
-                    <h3 style="color: #E74C3C; font-size: 16px; margin-top: 25px;">{t('analyzed_to_citing')}</h3>
-                    {f'<div style="font-size: 12px; color: #666; margin-bottom: 8px;">Total: {temporal.get("analyzed_to_citing", {}).get("total_connections", 0)} connections</div>' if temporal.get('analyzed_to_citing', {}).get('connections') else ''}
-                    <div class="scrollable-table" style="max-height: 400px;">
-                        <table id="analyzed_citing_table">
+                    <!-- ANALYZED→CITING HEATMAP -->
+                    <h3 style="color: #E74C3C; font-size: 16px; margin-top: 25px;">📊 {t('analyzed_to_citing')} - Temporal Heatmap</h3>
+                    <p style="color: #666; font-size: 12px; margin-bottom: 8px;">
+                        X-axis: Year of Citing article | Y-axis: Year of Analyzed article
+                        <span style="margin-left: 15px; font-weight: 600;">Color intensity = Number of connections</span>
+                    </p>
+                    <div class="scrollable-table" style="max-height: 500px;">
+                        <table id="citing_heatmap_table">
                             <thead>
                                 <tr>
-                                    <th class="sortable" onclick="sortTable('analyzed_citing_table', 0)">#</th>
-                                    <th class="sortable" onclick="sortTable('analyzed_citing_table', 1)">{t('analyzed_doi')}</th>
-                                    <th class="sortable" onclick="sortTable('analyzed_citing_table', 2)">{t('analyzed_date')}</th>
-                                    <th class="sortable" onclick="sortTable('analyzed_citing_table', 3)">{t('citing_doi')}</th>
-                                    <th class="sortable" onclick="sortTable('analyzed_citing_table', 4)">{t('citing_date')}</th>
-                                    <th class="sortable" onclick="sortTable('analyzed_citing_table', 5)">{t('time_lag_days')}</th>
-                                    <th>{t('title')} (Analyzed)</th>
-                                    <th>{t('title')} (Citing)</th>
+                                    <th>{t('publication_year')} (Analyzed) \ (Citing)</th>
+                                    {''.join([f'<th>{year}</th>' for year in temporal.get('all_years', [])])}
                                 </tr>
                             </thead>
                             <tbody>
                                 {''.join([
                                     f'''
                                     <tr>
-                                        <td>{i+1}</td>
-                                        <td><a href="https://doi.org/{html.escape(conn['analyzed_doi'])}" target="_blank" class="doi-link">{html.escape(conn['analyzed_doi'][:20])}...</a></td>
-                                        <td>{conn['analyzed_date']}</td>
-                                        <td><a href="https://doi.org/{html.escape(conn['citing_doi'])}" target="_blank" class="doi-link">{html.escape(conn['citing_doi'][:20])}...</a></td>
-                                        <td>{conn['citing_date']}</td>
-                                        <td>{get_color_scale_html(conn['lag_days'], max([c['lag_days'] for c in analyzed_citing_connections]) if analyzed_citing_connections else 1)}</td>
-                                        <td class="word-wrap" style="font-size: 11px; max-width: 150px;">{html.escape(conn['analyzed_title'])}</td>
-                                        <td class="word-wrap" style="font-size: 11px; max-width: 150px;">{html.escape(conn['citing_title'])}</td>
+                                        <td><strong>{row.get("publication_year", "N/A")}</strong></td>
+                                        {''.join([
+                                            f'<td class="heatmap-cell" style="{f"background: {get_heatmap_cell_color(row.get(year, 0), heatmap_max_citing)};" if row.get(year) is not None and row.get(year) > 0 else "background: transparent;"} color: {"#1a1a1a" if row.get(year) is not None and row.get(year) > 0 and row.get(year)/max(heatmap_max_citing, 1) > 0.6 else "#333" if row.get(year) is not None and row.get(year) > 0 else "transparent"};">{row.get(year) if row.get(year) is not None and row.get(year) > 0 else ""}</td>'
+                                            for year in temporal.get('all_years', [])
+                                        ])}
                                     </tr>
                                     '''
-                                    for i, conn in enumerate(analyzed_citing_connections[:50])
+                                    for row in temporal.get('analyzed_to_citing', {}).get('heatmap', [])
                                 ])}
                             </tbody>
                         </table>
                     </div>
-                    {f'<div style="margin-top: 8px; font-size: 12px; color: #999;">Showing {min(50, len(analyzed_citing_connections))} of {len(analyzed_citing_connections)} connections</div>' if analyzed_citing_connections else '<div style="color: #999; font-style: italic;">No connections found</div>'}
+                    
+                    <!-- LAG DISTRIBUTION -->
+                    <h3 style="color: {primary}; font-size: 16px; margin-top: 25px;">📈 Lag Distribution</h3>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                        <div>
+                            <h4 style="color: #3498DB; font-size: 13px;">Reference → Analyzed</h4>
+                            {''.join([
+                                f'''
+                                <div style="margin: 3px 0;">
+                                    <div class="progress-bar-label">
+                                        <span>{lag_range} days</span>
+                                        <span class="label-value">{count}</span>
+                                    </div>
+                                    <div class="progress-bar-container">
+                                        <div class="progress-bar-fill animate" style="width: {count/max([c for _, c in ref_lag_dist], default=1)*100:.1f}%; background: #3498DB;">
+                                            {count}
+                                        </div>
+                                    </div>
+                                </div>
+                                '''
+                                for lag_range, count in ref_lag_dist[:15]
+                            ])}
+                        </div>
+                        <div>
+                            <h4 style="color: #E74C3C; font-size: 13px;">Analyzed → Citing</h4>
+                            {''.join([
+                                f'''
+                                <div style="margin: 3px 0;">
+                                    <div class="progress-bar-label">
+                                        <span>{lag_range} days</span>
+                                        <span class="label-value">{count}</span>
+                                    </div>
+                                    <div class="progress-bar-container">
+                                        <div class="progress-bar-fill animate" style="width: {count/max([c for _, c in citing_lag_dist], default=1)*100:.1f}%; background: #E74C3C;">
+                                            {count}
+                                        </div>
+                                    </div>
+                                </div>
+                                '''
+                                for lag_range, count in citing_lag_dist[:15]
+                            ])}
+                        </div>
+                    </div>
+                    
+                    <!-- DETAILED CONNECTIONS TABLES (collapsible) -->
+                    <div style="margin-top: 25px;">
+                        <div class="collapser" onclick="toggleCitations('ref_connections')" style="border-left-color: #3498DB;">
+                            <strong style="color: #3498DB;">📋 Show Reference → Analyzed Connections</strong>
+                            <span class="citation-count-badge" style="background: #3498DB;">{len(ref_analyzed_connections)} connections</span>
+                            <span class="toggle-hint">{t('click_to_toggle')}</span>
+                        </div>
+                        <div id="citations_ref_connections" style="display: none; margin-bottom: 10px;">
+                            <div class="scrollable-table" style="max-height: 400px;">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>#</th>
+                                            <th>{t('ref_doi')}</th>
+                                            <th>{t('ref_date')}</th>
+                                            <th>{t('analyzed_doi')}</th>
+                                            <th>{t('analyzed_date')}</th>
+                                            <th>{t('time_lag_days')}</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {''.join([
+                                            f'''
+                                            <tr>
+                                                <td>{i+1}</td>
+                                                <td><a href="https://doi.org/{html.escape(conn['ref_doi'])}" target="_blank" class="doi-link">{html.escape(conn['ref_doi'][:20])}...</a></td>
+                                                <td>{conn['ref_date']}</td>
+                                                <td><a href="https://doi.org/{html.escape(conn['analyzed_doi'])}" target="_blank" class="doi-link">{html.escape(conn['analyzed_doi'][:20])}...</a></td>
+                                                <td>{conn['analyzed_date']}</td>
+                                                <td>{get_color_scale_html(conn['lag_days'], max([c['lag_days'] for c in ref_analyzed_connections]) if ref_analyzed_connections else 1)}</td>
+                                            </tr>
+                                            '''
+                                            for i, conn in enumerate(ref_analyzed_connections)
+                                        ])}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <div class="collapser" onclick="toggleCitations('citing_connections')" style="border-left-color: #E74C3C;">
+                            <strong style="color: #E74C3C;">📋 Show Analyzed → Citing Connections</strong>
+                            <span class="citation-count-badge" style="background: #E74C3C;">{len(analyzed_citing_connections)} connections</span>
+                            <span class="toggle-hint">{t('click_to_toggle')}</span>
+                        </div>
+                        <div id="citations_citing_connections" style="display: none; margin-bottom: 10px;">
+                            <div class="scrollable-table" style="max-height: 400px;">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>#</th>
+                                            <th>{t('analyzed_doi')}</th>
+                                            <th>{t('analyzed_date')}</th>
+                                            <th>{t('citing_doi')}</th>
+                                            <th>{t('citing_date')}</th>
+                                            <th>{t('time_lag_days')}</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {''.join([
+                                            f'''
+                                            <tr>
+                                                <td>{i+1}</td>
+                                                <td><a href="https://doi.org/{html.escape(conn['analyzed_doi'])}" target="_blank" class="doi-link">{html.escape(conn['analyzed_doi'][:20])}...</a></td>
+                                                <td>{conn['analyzed_date']}</td>
+                                                <td><a href="https://doi.org/{html.escape(conn['citing_doi'])}" target="_blank" class="doi-link">{html.escape(conn['citing_doi'][:20])}...</a></td>
+                                                <td>{conn['citing_date']}</td>
+                                                <td>{get_color_scale_html(conn['lag_days'], max([c['lag_days'] for c in analyzed_citing_connections]) if analyzed_citing_connections else 1)}</td>
+                                            </tr>
+                                            '''
+                                            for i, conn in enumerate(analyzed_citing_connections)
+                                        ])}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
                     
                 </div>
             </div>
