@@ -6172,7 +6172,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                                         <td><a href="https://doi.org/{html.escape(pub.get('doi', ''))}" target="_blank" class="doi-link">{html.escape(pub.get('doi', ''))}...</a></td>
                                     </tr>
                                     '''
-                                    for i, pub in enumerate(citation.get('most_cited', [])[:10])
+                                    for i, pub in enumerate(citation.get('most_cited', [])[:30])
                                 ])}
                             </tbody>
                         </table>
