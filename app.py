@@ -4430,8 +4430,8 @@ class DOIAnalyzer:
                             'lag_days': lag_days,
                             'ref_year': ref_year,
                             'analyzed_year': analyzed_year,
-                            'ref_title': ref_meta.get('title', 'No title')[:50],
-                            'analyzed_title': analyzed_meta.get('title', 'No title')[:50]
+                            'ref_title': (ref_meta.get('title', 'No title')[:50] if ref_meta and isinstance(ref_meta, dict) else 'No title'),
+                            'analyzed_title': (analyzed_meta.get('title', 'No title')[:50] if analyzed_meta and isinstance(analyzed_meta, dict) else 'No title')
                         })
                         ref_analyzed_lags.append(lag_days)
                         
@@ -4470,8 +4470,8 @@ class DOIAnalyzer:
                             'lag_days': lag_days,
                             'analyzed_year': analyzed_year,
                             'citing_year': citing_year,
-                            'analyzed_title': (analyzed_meta.get('title', 'No title') if analyzed_meta else 'No title')[:50],
-                            'citing_title': (citing_meta.get('title', 'No title') if citing_meta else 'No title')[:50]
+                            'analyzed_title': (analyzed_meta.get('title', 'No title')[:50] if analyzed_meta and isinstance(analyzed_meta, dict) else 'No title'),
+                            'citing_title': (citing_meta.get('title', 'No title')[:50] if citing_meta and isinstance(citing_meta, dict) else 'No title')
                         })
                         analyzed_citing_lags.append(lag_days)
                         
