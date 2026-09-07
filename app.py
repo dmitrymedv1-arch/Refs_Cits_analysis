@@ -4470,8 +4470,8 @@ class DOIAnalyzer:
                             'lag_days': lag_days,
                             'analyzed_year': analyzed_year,
                             'citing_year': citing_year,
-                            'analyzed_title': analyzed_meta.get('title', 'No title')[:50],
-                            'citing_title': citing_meta.get('title', 'No title')[:50]
+                            'analyzed_title': (analyzed_meta.get('title', 'No title') if analyzed_meta else 'No title')[:50],
+                            'citing_title': (citing_meta.get('title', 'No title') if citing_meta else 'No title')[:50]
                         })
                         analyzed_citing_lags.append(lag_days)
                         
