@@ -3473,7 +3473,7 @@ class DOIAnalyzer:
             'cumulative': cumulative_list,
             'heatmap': heatmap_data,
             'heatmap_years': all_years,
-            'most_cited': most_cited[:10]
+            'most_cited': most_cited[:30]
         }
     
     def _analyze_citing_works(self) -> Dict:
