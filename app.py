@@ -4423,6 +4423,23 @@ class DOIAnalyzer:
                     lag_days = (analyzed_date - ref_date).days
                     if lag_days >= 0:
                         ref_to_analyzed_connections.append({
+                        ref_title = 'No title'
+                        if ref_meta and isinstance(ref_meta, dict):
+                            ref_title = ref_meta.get('title', 'No title')
+                            if ref_title:
+                                ref_title = ref_title[:50]
+                            else:
+                                ref_title = 'No title'
+                        
+                        analyzed_title_ref = 'No title'
+                        if analyzed_meta and isinstance(analyzed_meta, dict):
+                            analyzed_title_ref = analyzed_meta.get('title', 'No title')
+                            if analyzed_title_ref:
+                                analyzed_title_ref = analyzed_title_ref[:50]
+                            else:
+                                analyzed_title_ref = 'No title'
+                        
+                        ref_to_analyzed_connections.append({
                             'ref_doi': ref_doi,
                             'analyzed_doi': analyzed_doi,
                             'ref_date': ref_date.strftime('%Y-%m-%d'),
@@ -4430,8 +4447,8 @@ class DOIAnalyzer:
                             'lag_days': lag_days,
                             'ref_year': ref_year,
                             'analyzed_year': analyzed_year,
-                            'ref_title': (ref_meta.get('title', 'No title')[:50] if ref_meta and isinstance(ref_meta, dict) else 'No title'),
-                            'analyzed_title': (analyzed_meta.get('title', 'No title')[:50] if analyzed_meta and isinstance(analyzed_meta, dict) else 'No title')
+                            'ref_title': ref_title,
+                            'analyzed_title': analyzed_title_ref
                         })
                         ref_analyzed_lags.append(lag_days)
                         
@@ -4462,6 +4479,22 @@ class DOIAnalyzer:
                 if citing_date and analyzed_date:
                     lag_days = (citing_date - analyzed_date).days
                     if lag_days >= 0:
+                        analyzed_title = 'No title'
+                        if analyzed_meta and isinstance(analyzed_meta, dict):
+                            analyzed_title = analyzed_meta.get('title', 'No title')
+                            if analyzed_title:
+                                analyzed_title = analyzed_title[:50]
+                            else:
+                                analyzed_title = 'No title'
+                        
+                        citing_title = 'No title'
+                        if citing_meta and isinstance(citing_meta, dict):
+                            citing_title = citing_meta.get('title', 'No title')
+                            if citing_title:
+                                citing_title = citing_title[:50]
+                            else:
+                                citing_title = 'No title'
+                        
                         analyzed_to_citing_connections.append({
                             'analyzed_doi': analyzed_doi,
                             'citing_doi': citing_doi,
@@ -4470,8 +4503,8 @@ class DOIAnalyzer:
                             'lag_days': lag_days,
                             'analyzed_year': analyzed_year,
                             'citing_year': citing_year,
-                            'analyzed_title': (analyzed_meta.get('title', 'No title')[:50] if analyzed_meta and isinstance(analyzed_meta, dict) else 'No title'),
-                            'citing_title': (citing_meta.get('title', 'No title')[:50] if citing_meta and isinstance(citing_meta, dict) else 'No title')
+                            'analyzed_title': analyzed_title,
+                            'citing_title': citing_title
                         })
                         analyzed_citing_lags.append(lag_days)
                         
