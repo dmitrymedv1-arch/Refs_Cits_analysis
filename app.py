@@ -4545,7 +4545,7 @@ class DOIAnalyzer:
         
         return {
             'ref_to_analyzed': {
-                'connections': ref_to_analyzed_connections[:100],
+                'connections': ref_to_analyzed_connections,
                 'total_connections': len(ref_to_analyzed_connections),
                 'stats': ref_analyzed_stats,
                 'heatmap': ref_heatmap_data,
@@ -4553,7 +4553,7 @@ class DOIAnalyzer:
                 'lag_distribution': ref_lag_dist
             },
             'analyzed_to_citing': {
-                'connections': analyzed_to_citing_connections[:100],
+                'connections': analyzed_to_citing_connections,
                 'total_connections': len(analyzed_to_citing_connections),
                 'stats': analyzed_citing_stats,
                 'heatmap': citing_heatmap_data,
