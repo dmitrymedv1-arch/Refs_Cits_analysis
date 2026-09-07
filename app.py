@@ -3833,25 +3833,25 @@ class DOIAnalyzer:
         level_III_dist = defaultdict(int)
         level_III_total = 0
         
-        for doi, weight in self.level_III.items():
+        for doi, weight in self.level_III.items():  # weight не используется
             meta = self.metadata_III.get(doi, {})
             author_count = meta.get('author_count', 0)
             if author_count > 0:
                 if author_count == 1:
-                    level_III_dist['1'] += weight
+                    level_III_dist['1'] += 1  # <- +1 вместо weight
                 elif author_count == 2:
-                    level_III_dist['2'] += weight
+                    level_III_dist['2'] += 1  # <- +1 вместо weight
                 elif 3 <= author_count <= 5:
-                    level_III_dist['3-5'] += weight
+                    level_III_dist['3-5'] += 1  # <- +1 вместо weight
                 elif 6 <= author_count <= 7:
-                    level_III_dist['6-7'] += weight
+                    level_III_dist['6-7'] += 1  # <- +1 вместо weight
                 elif 8 <= author_count <= 10:
-                    level_III_dist['8-10'] += weight
+                    level_III_dist['8-10'] += 1  # <- +1 вместо weight
                 elif 11 <= author_count <= 15:
-                    level_III_dist['11-15'] += weight
+                    level_III_dist['11-15'] += 1  # <- +1 вместо weight
                 else:
-                    level_III_dist['15+'] += weight
-                level_III_total += weight
+                    level_III_dist['15+'] += 1  # <- +1 вместо weight
+                level_III_total += 1  # <- +1 вместо weight
         
         category_order = ['1', '2', '3-5', '6-7', '8-10', '11-15', '15+']
         
