@@ -4422,7 +4422,6 @@ class DOIAnalyzer:
                 if ref_date and analyzed_date:
                     lag_days = (analyzed_date - ref_date).days
                     if lag_days >= 0:
-                        ref_to_analyzed_connections.append({
                         ref_title = 'No title'
                         if ref_meta and isinstance(ref_meta, dict):
                             ref_title = ref_meta.get('title', 'No title')
