@@ -4824,6 +4824,19 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
         key=lambda s: s.lower()
     )
     
+    # ===== NEW: Prepare references filter dropdown data =====
+    # Unique years for references filter
+    references_filter_years = sorted(
+        set([r.get('year') for r in references_list if r.get('year')]),
+        reverse=True
+    )
+    
+    # Unique journals for references filter
+    references_filter_journals = sorted(
+        set([r.get('journal', 'Unknown') for r in references_list]),
+        key=lambda s: s.lower()
+    )
+    
     # Helper for color scale in matrices
     def get_color_scale_html(value, max_val, min_val=0):
         if max_val == min_val:
@@ -5809,6 +5822,40 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                     
                     <p style="color: #666; font-size: 13px; margin-bottom: 10px;">{t('level_i_description')}</p>
                     
+                    <!-- Filter section for references -->
+                    <div class="filter-section">
+                        <div class="filter-row">
+                            <div class="filter-group">
+                                <label for="ref_filter_title">{t('filter_by_title')}:</label>
+                                <input type="text" id="ref_filter_title" placeholder="..." oninput="filterReferences()">
+                            </div>
+                            <div class="filter-group">
+                                <label for="ref_filter_year">{t('year')}:</label>
+                                <select id="ref_filter_year" onchange="filterReferences()">
+                                    <option value="">{t('all_years')}</option>
+                                    {''.join([f'<option value="{y}">{y}</option>' for y in references_filter_years])}
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label for="ref_filter_journal">{t('journal')}:</label>
+                                <select id="ref_filter_journal" onchange="filterReferences()">
+                                    <option value="">All journals</option>
+                                    {''.join([f'<option value="{html.escape(j)}">{html.escape(j)}</option>' for j in references_filter_journals])}
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label for="ref_filter_author">{t('filter_by_author')}:</label>
+                                <input type="text" id="ref_filter_author" placeholder="..." oninput="filterReferences()">
+                            </div>
+                            <div class="filter-group">
+                                <button type="button" onclick="resetReferencesFilters()" style="cursor:pointer; background: transparent; border: none; font-size: 12px; color: {primary}; font-weight: 600;">✖ Reset</button>
+                            </div>
+                        </div>
+                        <div class="filter-stats">
+                            <strong id="ref_filter_count">{len(references_list)}</strong> of <strong>{len(references_list)}</strong> references shown
+                        </div>
+                    </div>
+                    
                     <div class="scrollable-table" style="max-height: 500px;">
                         <table id="references_table">
                             <thead>
@@ -5824,7 +5871,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                             <tbody>
                                 {''.join([
                                     f'''
-                                    <tr>
+                                    <tr data-title="{html.escape((ref['title'] or '').lower())}" data-year="{ref.get('year') or ''}" data-journal="{html.escape(ref.get('journal', ''))}" data-authors="{html.escape(' '.join(ref.get('authors', [])).lower())}">
                                         <td>{i+1}</td>
                                         <td><a href="https://doi.org/{html.escape(ref['doi'])}" target="_blank" class="doi-link">{html.escape(ref['doi'])}</a></td>
                                         <td class="word-wrap">{html.escape(ref['title'][:120])}{'...' if len(ref['title']) > 120 else ''}</td>
@@ -7256,6 +7303,64 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
             
             filterCitingWeighted();
         }}
+
+        // ===== FILTER FOR REFERENCES (Level I) =====
+        function filterReferences() {
+            var titleInput = document.getElementById('ref_filter_title');
+            var yearSelect = document.getElementById('ref_filter_year');
+            var journalSelect = document.getElementById('ref_filter_journal');
+            var authorInput = document.getElementById('ref_filter_author');
+            var table = document.getElementById('references_table');
+            var countLabel = document.getElementById('ref_filter_count');
+            
+            if (!table) return;
+            
+            var titleQuery = titleInput ? titleInput.value.toLowerCase().trim() : '';
+            var yearQuery = yearSelect ? yearSelect.value : '';
+            var journalQuery = journalSelect ? journalSelect.value : '';
+            var authorQuery = authorInput ? authorInput.value.toLowerCase().trim() : '';
+            
+            var rows = table.querySelectorAll('tbody tr');
+            var visibleCount = 0;
+            
+            rows.forEach(function(row) {
+                var rowTitle = (row.getAttribute('data-title') || '').toLowerCase();
+                var rowYear = row.getAttribute('data-year') || '';
+                var rowJournal = row.getAttribute('data-journal') || '';
+                var rowAuthors = (row.getAttribute('data-authors') || '').toLowerCase();
+                
+                var matchTitle = !titleQuery || rowTitle.indexOf(titleQuery) !== -1;
+                var matchYear = !yearQuery || rowYear === yearQuery;
+                var matchJournal = !journalQuery || rowJournal === journalQuery;
+                var matchAuthor = !authorQuery || rowAuthors.indexOf(authorQuery) !== -1;
+                
+                if (matchTitle && matchYear && matchJournal && matchAuthor) {
+                    row.style.display = '';
+                    visibleCount++;
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+            
+            if (countLabel) {
+                countLabel.textContent = visibleCount;
+            }
+        }
+        
+        // ===== RESET FILTERS FOR REFERENCES =====
+        function resetReferencesFilters() {
+            var titleInput = document.getElementById('ref_filter_title');
+            var yearSelect = document.getElementById('ref_filter_year');
+            var journalSelect = document.getElementById('ref_filter_journal');
+            var authorInput = document.getElementById('ref_filter_author');
+            
+            if (titleInput) titleInput.value = '';
+            if (yearSelect) yearSelect.value = '';
+            if (journalSelect) journalSelect.value = '';
+            if (authorInput) authorInput.value = '';
+            
+            filterReferences();
+        }
         
         // ===== AUTO-OPEN FIRST SECTION =====
         document.addEventListener('DOMContentLoaded', function() {{
