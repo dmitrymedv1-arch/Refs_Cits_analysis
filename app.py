@@ -7334,7 +7334,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                 var matchJournal = !journalQuery || rowJournal === journalQuery;
                 var matchAuthor = !authorQuery || rowAuthors.indexOf(authorQuery) !== -1;
                 
-                if (matchTitle && matchYear && matchJournal && matchAuthor) {
+                if (matchTitle && matchYear && matchJournal && matchAuthor) {{
                     row.style.display = '';
                     visibleCount++;
                 }} else {{
