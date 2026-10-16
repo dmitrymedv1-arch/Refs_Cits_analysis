@@ -1772,20 +1772,33 @@ def get_work_by_doi(doi: str) -> Optional[Dict]:
             print(f"⚠️ Error fetching DOI {doi}: {e}")
         return None
 
-def get_citing_works(oa_id: str, cursor: str = "*", per_page: int = 50) -> Optional[Dict]:
+def get_citing_works(oa_id: str, cursor: str = "*", per_page: int = 200) -> Optional[Dict]:
     """Get citing works for a given OpenAlex ID with pagination"""
     url = f"https://api.openalex.org/works?filter=cites:{oa_id}&per_page={per_page}&cursor={cursor}"
     
-    try:
-        response = requests.get(url, timeout=30)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return None
-    except Exception as e:
-        if SHOW_DEBUG_LOGS:
-            print(f"⚠️ Error fetching citing works: {e}")
-        return None
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = requests.get(url, timeout=TIMEOUT)
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code == 429:
+                retry_after = int(response.headers.get('Retry-After', RETRY_DELAY * (attempt + 1)))
+                if SHOW_DEBUG_LOGS:
+                    print(f"⚠️ Rate limit (citing works), waiting {retry_after} sec...")
+                time.sleep(retry_after)
+                continue
+            else:
+                if SHOW_DEBUG_LOGS:
+                    print(f"⚠️ Error {response.status_code} for citing works {oa_id}")
+                return None
+        except Exception as e:
+            if SHOW_DEBUG_LOGS:
+                print(f"⚠️ Attempt {attempt+1}/{MAX_RETRIES} error fetching citing works: {str(e)[:100]}")
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAY * (attempt + 1))
+            else:
+                return None
+    return None
 
 def get_referenced_works_batch(openalex_ids: List[str]) -> List[Dict]:
     if not openalex_ids:
@@ -2651,10 +2664,10 @@ class DOIAnalyzer:
             # Get citing works (CITATIONS - Level III) - with pagination
             cursor = "*"
             citing_count = 0
-            max_citing = 1000  # Limit to prevent excessive requests, but can be increased
+            max_citing = 3000  # Limit to prevent excessive requests, but can be increased
             
             while cursor and citing_count < max_citing:
-                data = get_citing_works(oa_id, cursor, per_page=50)
+                data = get_citing_works(oa_id, cursor, per_page=200)
                 if not data or not data.get('results'):
                     break
                 
