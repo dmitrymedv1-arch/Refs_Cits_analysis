@@ -7305,7 +7305,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
         }}
 
         // ===== FILTER FOR REFERENCES (Level I) =====
-        function filterReferences() {
+        function filterReferences() {{
             var titleInput = document.getElementById('ref_filter_title');
             var yearSelect = document.getElementById('ref_filter_year');
             var journalSelect = document.getElementById('ref_filter_journal');
@@ -7323,7 +7323,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
             var rows = table.querySelectorAll('tbody tr');
             var visibleCount = 0;
             
-            rows.forEach(function(row) {
+            rows.forEach(function(row) {{
                 var rowTitle = (row.getAttribute('data-title') || '').toLowerCase();
                 var rowYear = row.getAttribute('data-year') || '';
                 var rowJournal = row.getAttribute('data-journal') || '';
@@ -7337,18 +7337,18 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                 if (matchTitle && matchYear && matchJournal && matchAuthor) {
                     row.style.display = '';
                     visibleCount++;
-                } else {
+                }} else {{
                     row.style.display = 'none';
-                }
-            });
+                }}
+            }});
             
-            if (countLabel) {
+            if (countLabel) {{
                 countLabel.textContent = visibleCount;
-            }
-        }
+            }}
+        }}
         
         // ===== RESET FILTERS FOR REFERENCES =====
-        function resetReferencesFilters() {
+        function resetReferencesFilters() {{
             var titleInput = document.getElementById('ref_filter_title');
             var yearSelect = document.getElementById('ref_filter_year');
             var journalSelect = document.getElementById('ref_filter_journal');
@@ -7360,7 +7360,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
             if (authorInput) authorInput.value = '';
             
             filterReferences();
-        }
+        }}
         
         // ===== AUTO-OPEN FIRST SECTION =====
         document.addEventListener('DOMContentLoaded', function() {{
