@@ -3627,9 +3627,9 @@ class DOIAnalyzer:
             reverse=True
         )
         
-        # Build citing works with weighted counts for display
+        # Build citing works with weighted counts for display (ALL, no [:50] limit)
         citing_works_with_weight = []
-        for citing_doi, weighted_count in sorted_citing_by_weight[:50]:
+        for citing_doi, weighted_count in sorted_citing_by_weight:
             meta = self.metadata_III.get(citing_doi, {})
             citing_works_with_weight.append({
                 'doi': citing_doi,
@@ -3637,7 +3637,9 @@ class DOIAnalyzer:
                 'title': meta.get('title', 'No title'),
                 'year': meta.get('publication_year'),
                 'journal': meta.get('journal_name', 'Unknown'),
-                'authors': meta.get('authors', [])[:3]
+                'authors': meta.get('authors', [])[:3],
+                'authors_full': meta.get('authors', []),
+                'cited_by_count': meta.get('cited_by_count', 0)
             })
         
         return {
@@ -4620,7 +4622,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
     secondary = theme_colors.get('secondary', '#f39c12')
 
     # ============================================
-    # ЗАГРУЗКА ИКОНОК В BASE64 (НОВЫЙ КОД)
+    # ЗАГРУЗКА ИКОНОК В BASE64
     # ============================================
     
     icons = {}
@@ -4785,6 +4787,30 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
     ref_analyzed_stats = temporal.get('ref_to_analyzed', {}).get('stats', {})
     analyzed_citing_stats = temporal.get('analyzed_to_citing', {}).get('stats', {})
     
+    # ===== NEW: Prepare sorted detailed citations (by total_citations desc, then by year desc) =====
+    detailed_citations_sorted = sorted(
+        detailed_citations.items(),
+        key=lambda kv: (
+            -kv[1].get('total_citations', 0) if kv[1].get('total_citations') is not None else 0,
+            -(kv[1].get('year') or 0)
+        )
+    )
+    
+    # ===== NEW: Prepare sorted citing works weighted for filter dropdowns =====
+    citing_works_weighted_list = citing.get('citing_works_weighted', [])
+    
+    # Unique years for filter
+    citing_filter_years = sorted(
+        set([cw.get('year') for cw in citing_works_weighted_list if cw.get('year')]),
+        reverse=True
+    )
+    
+    # Unique journals for filter
+    citing_filter_journals = sorted(
+        set([cw.get('journal', 'Unknown') for cw in citing_works_weighted_list]),
+        key=lambda s: s.lower()
+    )
+    
     # Helper for color scale in matrices
     def get_color_scale_html(value, max_val, min_val=0):
         if max_val == min_val:
@@ -4829,6 +4855,9 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
         bg_color = f"rgba({r}, {g}, {b}, 0.35)"
         formatted_value = f"{value:.{decimals}f}"
         return f'<span class="color-scale-value" style="background: {bg_color}; color: #1a1a1a;">{formatted_value}</span>'
+    
+    # ===== NEW: Prepare sorted detailed citations (by total_citations desc, then by year desc) =====
+    # (already computed above as detailed_citations_sorted)
     
     # Build HTML
     html_content = f"""
@@ -5653,13 +5682,13 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                     <h3 style="color: #2ECC71; font-size: 16px; margin: 15px 0 10px 0;">{t('level_ii')} - {t('analyzed_articles')}</h3>
                     <div class="metrics-grid">
                         <div class="metric-card"><div class="metric-value">{level_II_metrics.get('total_items', 0)}</div><div class="metric-label">{t('total_items')}</div></div>
+                        <div class="metric-card"><div class="metric-value">{level_II_metrics.get('international_collaboration_rate', 0):.1f}%</div><div class="metric-label">{t('international_collaboration_rate')}</div></div>
                         <div class="metric-card"><div class="metric-value">{level_II_metrics.get('total_citations', 0):,}</div><div class="metric-label">{t('total_citations')}</div></div>
                         <div class="metric-card"><div class="metric-value">{level_II_metrics.get('avg_citations', 0):.1f}</div><div class="metric-label">{t('avg_citations')}</div></div>
                         <div class="metric-card"><div class="metric-value">{level_II_metrics.get('unique_authors', 0):,}</div><div class="metric-label">{t('unique_authors')}</div></div>
                         <div class="metric-card"><div class="metric-value">{level_II_metrics.get('oa_percentage', 0):.1f}%</div><div class="metric-label">{t('open_access')}</div></div>
                         <div class="metric-card"><div class="metric-value">{level_II_metrics.get('h_index', 0)}</div><div class="metric-label">{t('h_index')}</div></div>
                         <div class="metric-card"><div class="metric-value">{level_II_metrics.get('active_years', 0)}</div><div class="metric-label">{t('active_years')}</div></div>
-                        <div class="metric-card"><div class="metric-value">{level_II_metrics.get('international_collaboration_rate', 0):.1f}%</div><div class="metric-label">{t('international_collaboration_rate')}</div></div>
                     </div>
                     
                     <!-- Level III Metrics -->
@@ -5784,7 +5813,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                                     f'''
                                     <tr>
                                         <td>{i+1}</td>
-                                        <td><a href="https://doi.org/{html.escape(ref['doi'])}" target="_blank" class="doi-link">{html.escape(ref['doi'])}...</a></td>
+                                        <td><a href="https://doi.org/{html.escape(ref['doi'])}" target="_blank" class="doi-link">{html.escape(ref['doi'])}</a></td>
                                         <td class="word-wrap">{html.escape(ref['title'][:120])}{'...' if len(ref['title']) > 120 else ''}</td>
                                         <td>{ref['year'] or 'N/A'}</td>
                                         <td>{get_color_scale_html(ref['count'], references_list[0]['count'] if references_list else 1)}</td>
@@ -5918,7 +5947,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                                         <td>{html.escape(aff['name'])}</td>
                                         <td>{get_color_scale_html(aff['count'], max([a.get('count', 0) for a in affiliation_analysis.get('top_affiliations', [])]) if affiliation_analysis.get('top_affiliations') else 1)}</td>
                                         <td>
-                                            {f'<a href="https://colab.ws/organizations/{aff["ror_short"]}" target="_blank" class="doi-link" style="font-family: monospace; font-size: 11px;">{aff["ror_short"]}...</a>' 
+                                            {f'<a href="https://colab.ws/organizations/{aff["ror_short"]}" target="_blank" class="doi-link" style="font-family: monospace; font-size: 11px;">{aff["ror_short"]}</a>' 
                                              if aff.get('ror_short') and aff['ror_short'] else '-'}
                                         </td>
                                     </tr>
@@ -6169,7 +6198,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                                         <td>{get_color_scale_html(pub['citations'], max([p.get('citations', 0) for p in citation.get('most_cited', [])]) if citation.get('most_cited') else 1)}</td>
                                         <td>{get_color_scale_html(round(pub.get('citations_per_year', 0), 1), max([p.get('citations_per_year', 0) for p in citation.get('most_cited', [])]) if citation.get('most_cited') else 1)}</td>
                                         <td>{html.escape(pub.get('authors', 'N/A'))}</td>
-                                        <td><a href="https://doi.org/{html.escape(pub.get('doi', ''))}" target="_blank" class="doi-link">{html.escape(pub.get('doi', ''))}...</a></td>
+                                        <td><a href="https://doi.org/{html.escape(pub.get('doi', ''))}" target="_blank" class="doi-link">{html.escape(pub.get('doi', ''))}</a></td>
                                     </tr>
                                     '''
                                     for i, pub in enumerate(citation.get('most_cited', [])[:30])
@@ -6251,7 +6280,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                                         <td>{html.escape(aff['name'])}</td>
                                         <td>{get_color_scale_html(aff['count'], max([a.get('count', 0) for a in citing.get('top_affiliations', [])]) if citing.get('top_affiliations') else 1)}</td>
                                         <td>
-                                            {f'<a href="https://colab.ws/organizations/{aff["ror_short"]}" target="_blank" class="doi-link" style="font-family: monospace; font-size: 11px;">{aff["ror_short"]}...</a>' 
+                                            {f'<a href="https://colab.ws/organizations/{aff["ror_short"]}" target="_blank" class="doi-link" style="font-family: monospace; font-size: 11px;">{aff["ror_short"]}</a>' 
                                              if aff.get('ror_short') and aff['ror_short'] else '-'}
                                         </td>
                                     </tr>
@@ -6322,9 +6351,44 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                         </table>
                     </div>
                     
-                    <!-- ===== NEW: Citing Works with Weighted Counts ===== -->
+                    <!-- ===== NEW: Citing Works with Weighted Counts (with filters, ALL rows, full DOI, cited_by_count column) ===== -->
                     <h3 style="color: {primary}; font-size: 16px; margin-top: 20px;">{t('citing_works_weighted')}</h3>
                     <p style="color: #666; font-size: 13px; margin-bottom: 10px;">{t('citing_weighted_count_desc')}</p>
+                    
+                    <!-- Filter section -->
+                    <div class="filter-section">
+                        <div class="filter-row">
+                            <div class="filter-group">
+                                <label for="cw_filter_title">{t('filter_by_title')}:</label>
+                                <input type="text" id="cw_filter_title" placeholder="..." oninput="filterCitingWeighted()">
+                            </div>
+                            <div class="filter-group">
+                                <label for="cw_filter_year">{t('year')}:</label>
+                                <select id="cw_filter_year" onchange="filterCitingWeighted()">
+                                    <option value="">{t('all_years')}</option>
+                                    {''.join([f'<option value="{y}">{y}</option>' for y in citing_filter_years])}
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label for="cw_filter_journal">{t('journal')}:</label>
+                                <select id="cw_filter_journal" onchange="filterCitingWeighted()">
+                                    <option value="">All journals</option>
+                                    {''.join([f'<option value="{html.escape(j)}">{html.escape(j)}</option>' for j in citing_filter_journals])}
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label for="cw_filter_author">{t('filter_by_author')}:</label>
+                                <input type="text" id="cw_filter_author" placeholder="..." oninput="filterCitingWeighted()">
+                            </div>
+                            <div class="filter-group">
+                                <button type="button" onclick="resetCitingWeightedFilters()" style="cursor:pointer; background: transparent; border: none; font-size: 12px; color: {primary}; font-weight: 600;">✖ Reset</button>
+                            </div>
+                        </div>
+                        <div class="filter-stats">
+                            <strong id="cw_filter_count">{len(citing_works_weighted_list)}</strong> of <strong>{len(citing_works_weighted_list)}</strong> citing works shown
+                        </div>
+                    </div>
+                    
                     <div class="scrollable-table" style="max-height: 500px;">
                         <table id="citing_weighted_table">
                             <thead>
@@ -6333,7 +6397,8 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                                     <th class="sortable" onclick="sortTable('citing_weighted_table', 1)">{t('doi')}</th>
                                     <th class="sortable" onclick="sortTable('citing_weighted_table', 2)">{t('title')}</th>
                                     <th class="sortable" onclick="sortTable('citing_weighted_table', 3)">{t('year')}</th>
-                                    <th class="sortable" onclick="sortTable('citing_weighted_table', 4)">{t('citing_weighted_count')}</th>
+                                    <th class="sortable" onclick="sortTable('citing_weighted_table', 4)">{t('total_citations')}</th>
+                                    <th class="sortable" onclick="sortTable('citing_weighted_table', 5)">{t('citing_weighted_count')}</th>
                                     <th>{t('journal')}</th>
                                     <th>{t('authors')}</th>
                                 </tr>
@@ -6341,22 +6406,23 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                             <tbody>
                                 {''.join([
                                     f'''
-                                    <tr>
+                                    <tr data-title="{html.escape(cite['title'].lower())}" data-year="{cite.get('year') or ''}" data-journal="{html.escape(cite.get('journal', ''))}" data-authors="{html.escape(' '.join(cite.get('authors_full', cite.get('authors', []))).lower())}">
                                         <td>{i+1}</td>
-                                        <td><a href="https://doi.org/{html.escape(cite['doi'])}" target="_blank" class="doi-link">{html.escape(cite['doi'])}...</a></td>
+                                        <td><a href="https://doi.org/{html.escape(cite['doi'])}" target="_blank" class="doi-link">{html.escape(cite['doi'])}</a></td>
                                         <td class="word-wrap">{html.escape(cite['title'][:120])}{'...' if len(cite['title']) > 120 else ''}</td>
                                         <td>{cite.get('year') or 'N/A'}</td>
+                                        <td>{get_color_scale_html(cite.get('cited_by_count', 0), max([c.get('cited_by_count', 0) for c in citing_works_weighted_list]) if citing_works_weighted_list else 1)}</td>
                                         <td>{get_color_scale_html(cite['weighted_count'], citing.get('max_weighted_count', 1))}</td>
                                         <td>{html.escape(cite.get('journal', 'Unknown'))}</td>
                                         <td>{', '.join([html.escape(a) for a in cite.get('authors', [])])}</td>
                                     </tr>
                                     '''
-                                    for i, cite in enumerate(citing.get('citing_works_weighted', []))
+                                    for i, cite in enumerate(citing_works_weighted_list)
                                 ])}
                             </tbody>
                         </table>
                     </div>
-                    {f'<div style="margin-top: 8px; font-size: 12px; color: #999;">Showing {len(citing.get("citing_works_weighted", []))} citing works with weighted counts (max: {citing.get("max_weighted_count", 0)})</div>' if citing.get('citing_works_weighted') else ''}
+                    {f'<div style="margin-top: 8px; font-size: 12px; color: #999;">Showing all {len(citing.get("citing_works_weighted", []))} citing works with weighted counts (max weighted: {citing.get("max_weighted_count", 0)})</div>' if citing.get('citing_works_weighted') else ''}
                     
                 </div>
             </div>
@@ -6532,7 +6598,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                             <strong class="cite-title">{html.escape((data['title'] or 'No title')[:120])}{'...' if len(data['title'] or '') > 120 else ''}</strong>
                             <span class="badge badge-info">{data['year'] or 'N/A'}</span>
                             <span class="citation-count-badge">{data['total_citations']} {t('citations')}</span>
-                            <span style="font-size: 12px; color: #999;">DOI: {data['doi'][:100] if data['doi'] else 'N/A'}...</span>
+                            <span style="font-size: 12px; color: #999;">DOI: {data['doi'] if data['doi'] else 'N/A'}</span>
                             <span class="toggle-hint">{t('click_to_toggle')}</span>
                         </div>
                         <div id="citations_{html.escape(doi)}" style="display: none; margin-bottom: 8px;">
@@ -6558,7 +6624,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                             ])}
                             {f'<div style="padding: 10px 18px; color: #999; font-style: italic;">{t("no_citations_found")}</div>' if not data['citations'] else ''}
                         </div>
-                        ''' for doi, data in list(detailed_citations.items())
+                        ''' for doi, data in detailed_citations_sorted
                     ])}
                     
                 </div>
@@ -6743,7 +6809,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
             </div>
             
             <!-- ============================================================ -->
-            <!-- SECTION 9: TITLE KEYWORDS ANALYSIS (NEW!) -->
+            <!-- SECTION 9: TITLE KEYWORDS ANALYSIS -->
             <!-- ============================================================ -->
             <div id="title_keywords" class="section">
                 <div class="section-header" onclick="toggleSection('title_keywords_content')">
@@ -6958,7 +7024,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                         </div>
                     </div>
                     
-                    <!-- DETAILED CONNECTIONS TABLES (collapsible) -->
+                    <!-- DETAILED CONNECTIONS TABLES (collapsible, WITH SORTING AND FULL DOI) -->
                     <div style="margin-top: 25px;">
                         <div class="collapser" onclick="toggleCitations('ref_connections')" style="border-left-color: #3498DB;">
                             <strong style="color: #3498DB;">📋 Show Reference → Analyzed Connections</strong>
@@ -6967,15 +7033,15 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                         </div>
                         <div id="citations_ref_connections" style="display: none; margin-bottom: 10px;">
                             <div class="scrollable-table" style="max-height: 400px;">
-                                <table>
+                                <table id="ref_connections_table">
                                     <thead>
                                         <tr>
-                                            <th>#</th>
-                                            <th>{t('ref_doi')}</th>
-                                            <th>{t('ref_date')}</th>
-                                            <th>{t('analyzed_doi')}</th>
-                                            <th>{t('analyzed_date')}</th>
-                                            <th>{t('time_lag_days')}</th>
+                                            <th class="sortable" onclick="sortTable('ref_connections_table', 0)">#</th>
+                                            <th class="sortable" onclick="sortTable('ref_connections_table', 1)">{t('ref_doi')}</th>
+                                            <th class="sortable" onclick="sortTable('ref_connections_table', 2)">{t('ref_date')}</th>
+                                            <th class="sortable" onclick="sortTable('ref_connections_table', 3)">{t('analyzed_doi')}</th>
+                                            <th class="sortable" onclick="sortTable('ref_connections_table', 4)">{t('analyzed_date')}</th>
+                                            <th class="sortable" onclick="sortTable('ref_connections_table', 5)">{t('time_lag_days')}</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -6983,9 +7049,9 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                                             f'''
                                             <tr>
                                                 <td>{i+1}</td>
-                                                <td><a href="https://doi.org/{html.escape(conn['ref_doi'])}" target="_blank" class="doi-link">{html.escape(conn['ref_doi'][:20])}...</a></td>
+                                                <td><a href="https://doi.org/{html.escape(conn['ref_doi'])}" target="_blank" class="doi-link">{html.escape(conn['ref_doi'])}</a></td>
                                                 <td>{conn['ref_date']}</td>
-                                                <td><a href="https://doi.org/{html.escape(conn['analyzed_doi'])}" target="_blank" class="doi-link">{html.escape(conn['analyzed_doi'][:20])}...</a></td>
+                                                <td><a href="https://doi.org/{html.escape(conn['analyzed_doi'])}" target="_blank" class="doi-link">{html.escape(conn['analyzed_doi'])}</a></td>
                                                 <td>{conn['analyzed_date']}</td>
                                                 <td>{get_color_scale_html(conn['lag_days'], max([c['lag_days'] for c in ref_analyzed_connections]) if ref_analyzed_connections else 1)}</td>
                                             </tr>
@@ -7004,15 +7070,15 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                         </div>
                         <div id="citations_citing_connections" style="display: none; margin-bottom: 10px;">
                             <div class="scrollable-table" style="max-height: 400px;">
-                                <table>
+                                <table id="citing_connections_table">
                                     <thead>
                                         <tr>
-                                            <th>#</th>
-                                            <th>{t('analyzed_doi')}</th>
-                                            <th>{t('analyzed_date')}</th>
-                                            <th>{t('citing_doi')}</th>
-                                            <th>{t('citing_date')}</th>
-                                            <th>{t('time_lag_days')}</th>
+                                            <th class="sortable" onclick="sortTable('citing_connections_table', 0)">#</th>
+                                            <th class="sortable" onclick="sortTable('citing_connections_table', 1)">{t('analyzed_doi')}</th>
+                                            <th class="sortable" onclick="sortTable('citing_connections_table', 2)">{t('analyzed_date')}</th>
+                                            <th class="sortable" onclick="sortTable('citing_connections_table', 3)">{t('citing_doi')}</th>
+                                            <th class="sortable" onclick="sortTable('citing_connections_table', 4)">{t('citing_date')}</th>
+                                            <th class="sortable" onclick="sortTable('citing_connections_table', 5)">{t('time_lag_days')}</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -7020,9 +7086,9 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                                             f'''
                                             <tr>
                                                 <td>{i+1}</td>
-                                                <td><a href="https://doi.org/{html.escape(conn['analyzed_doi'])}" target="_blank" class="doi-link">{html.escape(conn['analyzed_doi'][:20])}...</a></td>
+                                                <td><a href="https://doi.org/{html.escape(conn['analyzed_doi'])}" target="_blank" class="doi-link">{html.escape(conn['analyzed_doi'])}</a></td>
                                                 <td>{conn['analyzed_date']}</td>
-                                                <td><a href="https://doi.org/{html.escape(conn['citing_doi'])}" target="_blank" class="doi-link">{html.escape(conn['citing_doi'][:20])}...</a></td>
+                                                <td><a href="https://doi.org/{html.escape(conn['citing_doi'])}" target="_blank" class="doi-link">{html.escape(conn['citing_doi'])}</a></td>
                                                 <td>{conn['citing_date']}</td>
                                                 <td>{get_color_scale_html(conn['lag_days'], max([c['lag_days'] for c in analyzed_citing_connections]) if analyzed_citing_connections else 1)}</td>
                                             </tr>
@@ -7118,6 +7184,64 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
             rows.forEach(function(row) {{
                 tbody.appendChild(row);
             }});
+        }}
+        
+        // ===== FILTER FOR CITING WORKS WEIGHTED =====
+        function filterCitingWeighted() {{
+            var titleInput = document.getElementById('cw_filter_title');
+            var yearSelect = document.getElementById('cw_filter_year');
+            var journalSelect = document.getElementById('cw_filter_journal');
+            var authorInput = document.getElementById('cw_filter_author');
+            var table = document.getElementById('citing_weighted_table');
+            var countLabel = document.getElementById('cw_filter_count');
+            
+            if (!table) return;
+            
+            var titleQuery = titleInput ? titleInput.value.toLowerCase().trim() : '';
+            var yearQuery = yearSelect ? yearSelect.value : '';
+            var journalQuery = journalSelect ? journalSelect.value : '';
+            var authorQuery = authorInput ? authorInput.value.toLowerCase().trim() : '';
+            
+            var rows = table.querySelectorAll('tbody tr');
+            var visibleCount = 0;
+            
+            rows.forEach(function(row) {{
+                var rowTitle = (row.getAttribute('data-title') || '').toLowerCase();
+                var rowYear = row.getAttribute('data-year') || '';
+                var rowJournal = row.getAttribute('data-journal') || '';
+                var rowAuthors = (row.getAttribute('data-authors') || '').toLowerCase();
+                
+                var matchTitle = !titleQuery || rowTitle.indexOf(titleQuery) !== -1;
+                var matchYear = !yearQuery || rowYear === yearQuery;
+                var matchJournal = !journalQuery || rowJournal === journalQuery;
+                var matchAuthor = !authorQuery || rowAuthors.indexOf(authorQuery) !== -1;
+                
+                if (matchTitle && matchYear && matchJournal && matchAuthor) {{
+                    row.style.display = '';
+                    visibleCount++;
+                }} else {{
+                    row.style.display = 'none';
+                }}
+            }});
+            
+            if (countLabel) {{
+                countLabel.textContent = visibleCount;
+            }}
+        }}
+        
+        // ===== RESET FILTERS FOR CITING WORKS WEIGHTED =====
+        function resetCitingWeightedFilters() {{
+            var titleInput = document.getElementById('cw_filter_title');
+            var yearSelect = document.getElementById('cw_filter_year');
+            var journalSelect = document.getElementById('cw_filter_journal');
+            var authorInput = document.getElementById('cw_filter_author');
+            
+            if (titleInput) titleInput.value = '';
+            if (yearSelect) yearSelect.value = '';
+            if (journalSelect) journalSelect.value = '';
+            if (authorInput) authorInput.value = '';
+            
+            filterCitingWeighted();
         }}
         
         // ===== AUTO-OPEN FIRST SECTION =====
