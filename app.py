@@ -6504,7 +6504,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                             <tbody>
                                 {''.join([
                                     f'''
-                                    <tr data-title="{html.escape(cite['title'].lower())}" data-year="{cite.get('year') or ''}" data-journal="{html.escape(cite.get('journal', ''))}" data-authors="{html.escape(' '.join(cite.get('authors_full', cite.get('authors', []))).lower())}">
+                                    <tr data-title="{html.escape((cite.get('title') or '').lower())}" data-year="{cite.get('year') or ''}" data-journal="{html.escape(cite.get('journal') or '')}" data-authors="{html.escape(' '.join(cite.get('authors_full') or cite.get('authors') or []).lower())}">
                                         <td>{i+1}</td>
                                         <td><a href="https://doi.org/{html.escape(cite['doi'])}" target="_blank" class="doi-link">{html.escape(cite['doi'])}</a></td>
                                         <td class="word-wrap">{html.escape(cite['title'][:120])}{'...' if len(cite['title']) > 120 else ''}</td>
