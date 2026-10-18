@@ -6507,7 +6507,7 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                                     <tr data-title="{html.escape((cite.get('title') or '').lower())}" data-year="{cite.get('year') or ''}" data-journal="{html.escape(cite.get('journal') or '')}" data-authors="{html.escape(' '.join(cite.get('authors_full') or cite.get('authors') or []).lower())}">
                                         <td>{i+1}</td>
                                         <td><a href="https://doi.org/{html.escape(cite['doi'])}" target="_blank" class="doi-link">{html.escape(cite['doi'])}</a></td>
-                                        <td class="word-wrap">{html.escape(cite['title'][:120])}{'...' if len(cite['title']) > 120 else ''}</td>
+                                        <td class="word-wrap">{html.escape((cite.get('title') or 'No title')[:120])}{'...' if len(cite.get('title') or '') > 120 else ''}</td>
                                         <td>{cite.get('year') or 'N/A'}</td>
                                         <td>{get_color_scale_html(cite.get('cited_by_count', 0), max([c.get('cited_by_count', 0) for c in citing_works_weighted_list]) if citing_works_weighted_list else 1)}</td>
                                         <td>{get_color_scale_html(cite['weighted_count'], citing.get('max_weighted_count', 1))}</td>
