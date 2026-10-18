@@ -1772,32 +1772,67 @@ def get_work_by_doi(doi: str) -> Optional[Dict]:
             print(f"⚠️ Error fetching DOI {doi}: {e}")
         return None
 
-def get_citing_works(oa_id: str, cursor: str = "*", per_page: int = 200) -> Optional[Dict]:
-    """Get citing works for a given OpenAlex ID with pagination"""
-    url = f"https://api.openalex.org/works?filter=cites:{oa_id}&per_page={per_page}&cursor={cursor}"
+def get_citing_works(oa_id: str, page: int = 1, per_page: int = 100, 
+                     total_cited_by: Optional[int] = None) -> Optional[Dict]:
+    """
+    Get citing works for a given OpenAlex ID using page-based pagination.
+    
+    Page-based pagination is used because cursor paging after the first page
+    requires a free API key (returns 401 otherwise). Since we expect fewer
+    than 10,000 citing works per analyzed DOI, page-based paging is sufficient.
+    
+    Args:
+        oa_id: OpenAlex work ID (without URL prefix)
+        page: Page number (1-based)
+        per_page: Results per page (max 100 per OpenAlex docs)
+        total_cited_by: Optional total cited_by_count from the analyzed work,
+                        used to decide when to stop paginating early.
+    
+    Returns:
+        JSON dict with 'results' and 'meta' keys, or None on failure.
+    """
+    url = "https://api.openalex.org/works"
+    params = {
+        'filter': f'cites:{oa_id}',
+        'per_page': per_page,
+        'page': page,
+    }
     
     for attempt in range(MAX_RETRIES):
         try:
-            response = requests.get(url, timeout=TIMEOUT)
+            response = requests.get(url, params=params, timeout=TIMEOUT)
+            
             if response.status_code == 200:
                 return response.json()
+            
             elif response.status_code == 429:
                 retry_after = int(response.headers.get('Retry-After', RETRY_DELAY * (attempt + 1)))
                 if SHOW_DEBUG_LOGS:
-                    print(f"⚠️ Rate limit (citing works), waiting {retry_after} sec...")
+                    print(f"⚠️ Rate limit (citing works page {page}), waiting {retry_after} sec...")
                 time.sleep(retry_after)
                 continue
+            
+            elif response.status_code == 400:
+                # Typically: page * per_page exceeds 10,000 limit
+                if SHOW_DEBUG_LOGS:
+                    print(f"⚠️ Page limit reached for {oa_id} at page {page} "
+                          f"(page*per_page={page*per_page}). Stopping pagination.")
+                return None
+            
             else:
                 if SHOW_DEBUG_LOGS:
-                    print(f"⚠️ Error {response.status_code} for citing works {oa_id}")
+                    print(f"⚠️ Error {response.status_code} for citing works {oa_id} page {page}")
                 return None
+                
         except Exception as e:
             if SHOW_DEBUG_LOGS:
-                print(f"⚠️ Attempt {attempt+1}/{MAX_RETRIES} error fetching citing works: {str(e)[:100]}")
+                print(f"⚠️ Attempt {attempt+1}/{MAX_RETRIES} error fetching citing works "
+                      f"(page {page}): {str(e)[:100]}")
             if attempt < MAX_RETRIES - 1:
                 time.sleep(RETRY_DELAY * (attempt + 1))
             else:
                 return None
+    
     return None
 
 def get_referenced_works_batch(openalex_ids: List[str]) -> List[Dict]:
@@ -2639,21 +2674,17 @@ class DOIAnalyzer:
             metadata[doi] = parsed
             oa_id = work.get('id', '').replace('https://openalex.org/', '')
             
-            # Get referenced works (REFERENCES - Level I)
+            # ============ Level I: referenced works ============
             ref_ids = work.get('referenced_works', [])
             if ref_ids:
-                # Extract OpenAlex IDs
                 oa_ref_ids = [rid.replace('https://openalex.org/', '') for rid in ref_ids]
-                
-                # Fetch referenced works metadata
                 ref_works = get_referenced_works_batch(oa_ref_ids)
                 for ref_work in ref_works:
                     if ref_work is None:
                         continue
                     ref_doi = ref_work.get('doi', '')
                     if ref_doi:
-                        ref_doi = ref_doi.replace('https://doi.org/', '')
-                        ref_doi = normalize_doi(ref_doi)
+                        ref_doi = normalize_doi(ref_doi.replace('https://doi.org/', ''))
                         self.level_I[ref_doi] += 1
                         self.citations_from_II_to_I[doi].append(ref_doi)
                         if ref_doi not in self.metadata_I:
@@ -2661,48 +2692,53 @@ class DOIAnalyzer:
                             if parsed_ref:
                                 self.metadata_I[ref_doi] = parsed_ref
             
-            # Get citing works (CITATIONS - Level III) - with pagination
-            cursor = "*"
-            citing_count = 0
-            max_citing = 3000  # Limit to prevent excessive requests, but can be increased
+            # ============ Level III: citing works (page-based paging) ============
+            total_cited_by = work.get('cited_by_count', 0) or 0
+            per_page = 100          # OpenAlex max is 100
+            max_pages = 100         # Hard cap = 10,000 results (OpenAlex limit)
+            page = 1
+            fetched_citing = 0
             
-            while cursor and citing_count < max_citing:
-                data = get_citing_works(oa_id, cursor, per_page=200)
-                if not data or not data.get('results'):
+            while page <= max_pages:
+                data = get_citing_works(oa_id, page=page, per_page=per_page,
+                                        total_cited_by=total_cited_by)
+                if not data:
                     break
                 
-                for citing_work in data.get('results', []):
+                results = data.get('results', [])
+                if not results:
+                    break
+                
+                for citing_work in results:
                     if citing_work is None:
                         continue
                     citing_doi = citing_work.get('doi', '')
                     if citing_doi:
-                        citing_doi = citing_doi.replace('https://doi.org/', '')
-                        citing_doi = normalize_doi(citing_doi)
+                        citing_doi = normalize_doi(citing_doi.replace('https://doi.org/', ''))
                         self.level_III[citing_doi] += 1
                         self.citations_from_III_to_II[citing_doi].append(doi)
-                        citing_count += 1
+                        fetched_citing += 1
                         if citing_doi not in self.metadata_III:
                             parsed_citing = parse_work_metadata(citing_work)
                             if parsed_citing:
                                 self.metadata_III[citing_doi] = parsed_citing
                 
-                cursor = data.get('meta', {}).get('next_cursor')
-                if cursor:
-                    time.sleep(DELAY_BETWEEN_BATCHES)
+                # Early stop: we've fetched as many as cited_by_count suggests
+                if total_cited_by and fetched_citing >= total_cited_by:
+                    break
+                
+                # Early stop: partial page → last page reached
+                if len(results) < per_page:
+                    break
+                
+                page += 1
+                time.sleep(DELAY_BETWEEN_BATCHES)
             
-            # Check for cross-level citations (Level II DOI in Level I or III)
+            # Check for cross-level citations
             if doi in self.level_I:
-                self.cross_level_citations.append({
-                    'doi': doi,
-                    'level': 'I',
-                    'count': self.level_I[doi]
-                })
+                self.cross_level_citations.append({'doi': doi, 'level': 'I', 'count': self.level_I[doi]})
             if doi in self.level_III:
-                self.cross_level_citations.append({
-                    'doi': doi,
-                    'level': 'III',
-                    'count': self.level_III[doi]
-                })
+                self.cross_level_citations.append({'doi': doi, 'level': 'III', 'count': self.level_III[doi]})
             
             if progress_callback:
                 progress_callback(idx + 1, total)
@@ -2728,8 +2764,10 @@ class DOIAnalyzer:
         
         if SHOW_DEBUG_LOGS:
             print(f"✅ Level II fetched: {len(metadata)} works")
-            print(f"   Level I references: {len(self.level_I)} unique (total weighted: {sum(self.level_I.values())})")
-            print(f"   Level III citing: {len(self.level_III)} unique (total weighted: {sum(self.level_III.values())})")
+            print(f"   Level I references: {len(self.level_I)} unique "
+                  f"(total weighted: {sum(self.level_I.values())})")
+            print(f"   Level III citing: {len(self.level_III)} unique "
+                  f"(total weighted: {sum(self.level_III.values())})")
         
         return metadata
     
