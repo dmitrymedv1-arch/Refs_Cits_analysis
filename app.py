@@ -5785,6 +5785,43 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
             .level-badge-I {{ background: #3498DB; color: white; }}
             .level-badge-II {{ background: #2ECC71; color: white; }}
             .level-badge-III {{ background: #E74C3C; color: white; }}
+            
+            /* NEW: нейтральная карточка для Cross-level citations */
+            .info-card {{
+                background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+                border: 1px solid #e9ecef;
+                border-left: 4px solid {primary};
+                border-radius: 10px;
+                padding: 12px 18px;
+                margin-top: 15px;
+                box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+            }}
+            .info-card .info-card-header {{
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                user-select: none;
+            }}
+            .info-card .info-card-title {{
+                font-size: 15px;
+                font-weight: 700;
+                color: #2C3E50;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }}
+            .info-card .info-card-body {{
+                margin-top: 10px;
+                padding-top: 10px;
+                border-top: 1px solid #e9ecef;
+                font-size: 12px;
+                color: #555;
+                line-height: 1.7;
+            }}
+            .info-card .info-card-row {{
+                padding: 4px 0;
+            }}
         </style>
     </head>
     <body>
@@ -5881,11 +5918,25 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
                         <div class="metric-card"><div class="metric-value">{level_III_metrics.get('active_years', 0)}</div><div class="metric-label">{t('active_years')}</div></div>
                     </div>
                     
-                    <!-- Cross-level citations warning -->
+
+                    <!-- Cross-level citations -->
                     {f'''
-                    <div style="margin-top: 15px; padding: 12px 18px; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: 8px;">
-                        <strong>⚠️ {t('cross_level_citation', doi='', count='')}</strong>
-                        {''.join([f'<div style="font-size: 12px; margin-top: 4px;">DOI: {c["doi"]} appears in Level {c["level"]} with count {c["count"]}</div>' for c in analyzer.cross_level_citations])}
+                    <div class="info-card">
+                        <div class="info-card-header" onclick="toggleSection('cross_level_content')">
+                            <div class="info-card-title">
+                                ℹ️ Cross-level citations
+                                <span class="badge badge-info">{len(analyzer.cross_level_citations)}</span>
+                            </div>
+                            <span class="toggle-indicator collapsed" id="cross_level_indicator">▼</span>
+                        </div>
+                        <div id="cross_level_content" class="section-content collapsed" style="display: none;">
+                            <div class="info-card-body">
+                                {''.join([
+                                    f'<div class="info-card-row">DOI <a href="https://doi.org/{html.escape(c["doi"])}" target="_blank" class="doi-link">{html.escape(c["doi"])}</a> — appears in Level {c["level"]} (count: {c["count"]})</div>'
+                                    for c in analyzer.cross_level_citations
+                                ])}
+                            </div>
+                        </div>
                     </div>
                     ''' if analyzer.cross_level_citations else ''}
                     
@@ -7515,14 +7566,14 @@ def generate_multilevel_html_report(analyzer: DOIAnalyzer,
         
         // ===== AUTO-OPEN FIRST SECTION =====
         document.addEventListener('DOMContentLoaded', function() {{
-            var sections = ['overview_content', 'references_content', 'analyzed_content', 'citation_content', 'citing_content', 'topics_content', 'detailed_content', 'multilevel_content', 'title_keywords_content', 'temporal_content'];
+            var sections = ['overview_content', 'references_content', 'analyzed_content', 'citation_content', 'citing_content', 'topics_content', 'detailed_content', 'multilevel_content', 'title_keywords_content', 'temporal_content', 'cross_level_content'];
             sections.forEach(function(id) {{
                 var el = document.getElementById(id);
                 if (el) {{
                     el.style.display = 'none';
                 }}
             }});
-            var indicators = ['overview_indicator', 'references_indicator', 'analyzed_indicator', 'citation_indicator', 'citing_indicator', 'topics_indicator', 'detailed_indicator', 'multilevel_indicator', 'title_keywords_indicator', 'temporal_indicator'];
+            var indicators = ['overview_indicator', 'references_indicator', 'analyzed_indicator', 'citation_indicator', 'citing_indicator', 'topics_indicator', 'detailed_indicator', 'multilevel_indicator', 'title_keywords_indicator', 'temporal_indicator', 'cross_level_indicator'];
             indicators.forEach(function(id) {{
                 var el = document.getElementById(id);
                 if (el) {{
