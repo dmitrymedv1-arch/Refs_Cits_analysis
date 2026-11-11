@@ -7618,7 +7618,7 @@ def run_multilevel_analysis(doi_input: str, max_workers: int = 6):
         st.warning(t('duplicate_dois', count=duplicates))
     
     # Check maximum
-    if len(unique_dois) > 160:
+    if len(unique_dois) > 170:
         st.error(t('too_many_dois', count=len(unique_dois)))
         return
     
