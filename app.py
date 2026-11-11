@@ -2,7 +2,6 @@
 # СЕКЦИЯ ПАРАМЕТРОВ (настройка запросов)
 # ============================================
 
-# Параметры API запросов
 BATCH_SIZE = 50 
 MAX_RETRIES = 3 
 TIMEOUT = 30 
@@ -71,6 +70,33 @@ import difflib
 from threading import Lock
 from tqdm import tqdm
 import random
+
+# ============================================
+# OPENALEX API KEY (из .streamlit/secrets.toml)
+# ============================================
+
+def get_openalex_api_key() -> Optional[str]:
+    """
+    Получить OpenAlex API key из st.secrets.
+    Возвращает None, если ключ не задан.
+    """
+    try:
+        key = st.secrets.get("OPENALEX_API_KEY")
+        if key and str(key).strip():
+            return str(key).strip()
+        return None
+    except Exception:
+        return None
+
+OPENALEX_API_KEY = get_openalex_api_key()
+
+# Заголовки для запросов к OpenAlex (единообразно для всех вызовов)
+def get_openalex_headers() -> Dict[str, str]:
+    """Вернуть заголовки для OpenAlex API с ключом (если есть)."""
+    headers = {}
+    if OPENALEX_API_KEY:
+        headers["Authorization"] = f"Bearer {OPENALEX_API_KEY}"
+    return headers
 
 # ============================================
 # СЛОВАРЬ ПЕРЕВОДОВ (только английский)
@@ -1714,18 +1740,37 @@ def smart_request(params, retries=5):
             with lock:
                 time.sleep(random.uniform(0.2, 0.45))
             
-            resp = requests.get(base_url, params=params, timeout=30)
+            # NEW: заголовок с API key (если задан)
+            resp = requests.get(
+                base_url,
+                params=params,
+                headers=get_openalex_headers(),
+                timeout=30
+            )
             
             if resp.status_code == 429:
                 wait = int(resp.headers.get("Retry-After", 3))
                 time.sleep(wait + random.uniform(1, 2))
+                continue
+            
+            if resp.status_code == 403:
+                # NEW: ключ не активирован
+                try:
+                    err = resp.json().get("error", "")
+                except Exception:
+                    err = ""
+                if "key_not_activated" in err or "not activated" in err.lower():
+                    if SHOW_DEBUG_LOGS:
+                        print("⚠️ OpenAlex API key not activated. "
+                              "Activate it via the link in the registration email.")
+                time.sleep(1.2 ** attempt)
                 continue
                 
             if resp.status_code == 200:
                 return resp.json()
             
             time.sleep(1.2 ** attempt)
-        except:
+        except Exception:
             time.sleep(1.5 ** attempt)
     return None
 
@@ -1760,7 +1805,12 @@ def get_work_by_doi(doi: str) -> Optional[Dict]:
     url = f"https://api.openalex.org/works/doi:{doi}"
     
     try:
-        response = requests.get(url, timeout=30)
+        # NEW: заголовок с API key
+        response = requests.get(
+            url,
+            headers=get_openalex_headers(),
+            timeout=30
+        )
         if response.status_code == 200:
             return response.json()
         else:
@@ -1772,35 +1822,101 @@ def get_work_by_doi(doi: str) -> Optional[Dict]:
             print(f"⚠️ Error fetching DOI {doi}: {e}")
         return None
 
-def get_citing_works(oa_id: str, page: int = 1, per_page: int = 100, 
-                     total_cited_by: Optional[int] = None) -> Optional[Dict]:
+def get_citing_works_all(oa_id: str, total_cited_by: Optional[int] = None) -> List[Dict]:
     """
-    Get citing works for a given OpenAlex ID using page-based pagination.
+    Get ALL citing works for a given OpenAlex ID.
     
-    Page-based pagination is used because cursor paging after the first page
-    requires a free API key (returns 401 otherwise). Since we expect fewer
-    than 10,000 citing works per analyzed DOI, page-based paging is sufficient.
+    Режимы:
+    - Если OPENALEX_API_KEY задан → курсорная пагинация (cursor=* → next_cursor).
+    - Если ключа нет → page-пагинация (page=1,2,...), per_page=95,
+      с ранней остановкой (len(results) < per_page или total_cited_by достигнут).
     
-    Args:
-        oa_id: OpenAlex work ID (without URL prefix)
-        page: Page number (1-based)
-        per_page: Results per page (max 100 per OpenAlex docs)
-        total_cited_by: Optional total cited_by_count from the analyzed work,
-                        used to decide when to stop paginating early.
-    
-    Returns:
-        JSON dict with 'results' and 'meta' keys, or None on failure.
+    Возвращает список работ (каждый элемент — dict из OpenAlex).
     """
     url = "https://api.openalex.org/works"
-    params = {
-        'filter': f'cites:{oa_id}',
-        'per_page': per_page,
-        'page': page,
-    }
+    per_page = 95  # близко к максимуму 100, но с запасом
     
+    headers = get_openalex_headers()
+    use_cursor = bool(OPENALEX_API_KEY)
+    
+    all_works: List[Dict] = []
+    fetched = 0
+    
+    # ---------- Режим с ключом: курсорная пагинация ----------
+    if use_cursor:
+        cursor = "*"
+        page_num = 1
+        while True:
+            params = {
+                'filter': f'cites:{oa_id}',
+                'per_page': per_page,
+                'cursor': cursor,
+            }
+            data = _request_citing_page(url, params, headers, page_num, oa_id)
+            if data is None:
+                break
+            
+            results = data.get('results', []) or []
+            if not results:
+                break
+            
+            all_works.extend(results)
+            fetched += len(results)
+            
+            # Ранняя остановка по total_cited_by
+            if total_cited_by and fetched >= total_cited_by:
+                break
+            
+            # Конец пагинации
+            next_cursor = (data.get('meta') or {}).get('next_cursor')
+            if not next_cursor:
+                break
+            
+            cursor = next_cursor
+            page_num += 1
+            time.sleep(DELAY_BETWEEN_BATCHES)
+    
+    # ---------- Режим без ключа: page-пагинация ----------
+    else:
+        page = 1
+        max_pages = 10000 // per_page  # защита от лимита 10 000
+        while page <= max_pages:
+            params = {
+                'filter': f'cites:{oa_id}',
+                'per_page': per_page,
+                'page': page,
+            }
+            data = _request_citing_page(url, params, headers, page, oa_id)
+            if data is None:
+                break
+            
+            results = data.get('results', []) or []
+            if not results:
+                break
+            
+            all_works.extend(results)
+            fetched += len(results)
+            
+            if total_cited_by and fetched >= total_cited_by:
+                break
+            if len(results) < per_page:
+                break
+            
+            page += 1
+            time.sleep(DELAY_BETWEEN_BATCHES)
+    
+    return all_works
+
+
+def _request_citing_page(url: str, params: Dict, headers: Dict,
+                         page_num: int, oa_id: str) -> Optional[Dict]:
+    """
+    Вспомогательная функция: один запрос страницы citing works
+    с retry-логикой и обработкой 429/401/403/400.
+    """
     for attempt in range(MAX_RETRIES):
         try:
-            response = requests.get(url, params=params, timeout=TIMEOUT)
+            response = requests.get(url, params=params, headers=headers, timeout=TIMEOUT)
             
             if response.status_code == 200:
                 return response.json()
@@ -1808,26 +1924,44 @@ def get_citing_works(oa_id: str, page: int = 1, per_page: int = 100,
             elif response.status_code == 429:
                 retry_after = int(response.headers.get('Retry-After', RETRY_DELAY * (attempt + 1)))
                 if SHOW_DEBUG_LOGS:
-                    print(f"⚠️ Rate limit (citing works page {page}), waiting {retry_after} sec...")
+                    print(f"⚠️ Rate limit (citing {oa_id}, page {page_num}), "
+                          f"waiting {retry_after} sec...")
                 time.sleep(retry_after)
                 continue
             
-            elif response.status_code == 400:
-                # Typically: page * per_page exceeds 10,000 limit
+            elif response.status_code == 401:
+                # Курсор без ключа или невалидный ключ
                 if SHOW_DEBUG_LOGS:
-                    print(f"⚠️ Page limit reached for {oa_id} at page {page} "
-                          f"(page*per_page={page*per_page}). Stopping pagination.")
+                    print(f"⚠️ 401 Unauthorized for citing {oa_id}, page {page_num}. "
+                          f"Stopping pagination.")
+                return None
+            
+            elif response.status_code == 403:
+                # Ключ не активирован
+                try:
+                    err = response.json().get("error", "")
+                except Exception:
+                    err = ""
+                if SHOW_DEBUG_LOGS:
+                    print(f"⚠️ 403 for citing {oa_id}: {err}. "
+                          f"Activate the key via email link.")
+                return None
+            
+            elif response.status_code == 400:
+                if SHOW_DEBUG_LOGS:
+                    print(f"⚠️ 400 for citing {oa_id}, page {page_num} "
+                          f"(possibly depth limit). Stopping.")
                 return None
             
             else:
                 if SHOW_DEBUG_LOGS:
-                    print(f"⚠️ Error {response.status_code} for citing works {oa_id} page {page}")
+                    print(f"⚠️ Error {response.status_code} for citing {oa_id}, page {page_num}")
                 return None
                 
         except Exception as e:
             if SHOW_DEBUG_LOGS:
-                print(f"⚠️ Attempt {attempt+1}/{MAX_RETRIES} error fetching citing works "
-                      f"(page {page}): {str(e)[:100]}")
+                print(f"⚠️ Attempt {attempt+1}/{MAX_RETRIES} error fetching citing "
+                      f"({oa_id}, page {page_num}): {str(e)[:100]}")
             if attempt < MAX_RETRIES - 1:
                 time.sleep(RETRY_DELAY * (attempt + 1))
             else:
@@ -2644,6 +2778,7 @@ class DOIAnalyzer:
             self.citations_from_II_to_I = defaultdict(list, cached.get('citations_from_ii_to_i', {}))
             self.citations_from_III_to_II = defaultdict(list, cached.get('citations_from_iii_to_ii', {}))
             self.metadata_II = cached.get('metadata_ii', {})
+            self.metadata_III = cached.get('metadata_iii', {})   # NEW
             if SHOW_DEBUG_LOGS:
                 print(f"✅ Loaded Level II from cache")
             return self.metadata_II
@@ -2692,47 +2827,24 @@ class DOIAnalyzer:
                             if parsed_ref:
                                 self.metadata_I[ref_doi] = parsed_ref
             
-            # ============ Level III: citing works (page-based paging) ============
+            # ============ Level III: citing works ============
+            # Логика пагинации (курсор или page) инкапсулирована в get_citing_works_all
             total_cited_by = work.get('cited_by_count', 0) or 0
-            per_page = 100          # OpenAlex max is 100
-            max_pages = 100         # Hard cap = 10,000 results (OpenAlex limit)
-            page = 1
-            fetched_citing = 0
             
-            while page <= max_pages:
-                data = get_citing_works(oa_id, page=page, per_page=per_page,
-                                        total_cited_by=total_cited_by)
-                if not data:
-                    break
-                
-                results = data.get('results', [])
-                if not results:
-                    break
-                
-                for citing_work in results:
-                    if citing_work is None:
-                        continue
-                    citing_doi = citing_work.get('doi', '')
-                    if citing_doi:
-                        citing_doi = normalize_doi(citing_doi.replace('https://doi.org/', ''))
-                        self.level_III[citing_doi] += 1
-                        self.citations_from_III_to_II[citing_doi].append(doi)
-                        fetched_citing += 1
-                        if citing_doi not in self.metadata_III:
-                            parsed_citing = parse_work_metadata(citing_work)
-                            if parsed_citing:
-                                self.metadata_III[citing_doi] = parsed_citing
-                
-                # Early stop: we've fetched as many as cited_by_count suggests
-                if total_cited_by and fetched_citing >= total_cited_by:
-                    break
-                
-                # Early stop: partial page → last page reached
-                if len(results) < per_page:
-                    break
-                
-                page += 1
-                time.sleep(DELAY_BETWEEN_BATCHES)
+            citing_works = get_citing_works_all(oa_id, total_cited_by=total_cited_by)
+            
+            for citing_work in citing_works:
+                if citing_work is None:
+                    continue
+                citing_doi = citing_work.get('doi', '')
+                if citing_doi:
+                    citing_doi = normalize_doi(citing_doi.replace('https://doi.org/', ''))
+                    self.level_III[citing_doi] += 1
+                    self.citations_from_III_to_II[citing_doi].append(doi)
+                    if citing_doi not in self.metadata_III:
+                        parsed_citing = parse_work_metadata(citing_work)
+                        if parsed_citing:
+                            self.metadata_III[citing_doi] = parsed_citing
             
             # Check for cross-level citations
             if doi in self.level_I:
@@ -2748,14 +2860,15 @@ class DOIAnalyzer:
         # Store metadata
         self.metadata_II = metadata
         
-        # Save to cache
+        # Save to cache (включая metadata_III, чтобы повторный запуск не дёргал API)
         cache_data = {
             'level_ii': list(self.level_II),
             'level_i': dict(self.level_I),
             'level_iii': dict(self.level_III),
             'citations_from_ii_to_i': dict(self.citations_from_II_to_I),
             'citations_from_iii_to_ii': dict(self.citations_from_III_to_II),
-            'metadata_ii': self.metadata_II
+            'metadata_ii': self.metadata_II,
+            'metadata_iii': self.metadata_III,   # NEW
         }
         save_to_cache(cache_id, cache_data, "level_ii")
         
@@ -7697,6 +7810,12 @@ def main():
             )
         
         st.markdown("---")
+        
+        # NEW: статус OpenAlex API key
+        if OPENALEX_API_KEY:
+            st.success("🔑 OpenAlex API key: loaded")
+        else:
+            st.warning("🔑 OpenAlex API key: not set (using page pagination)")
         
         st.markdown(f"## {t('analysis_params')}")
         
